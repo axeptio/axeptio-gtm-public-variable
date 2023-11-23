@@ -13,12 +13,12 @@ ___INFO___
   "id": "cvt_temp_public_id",
   "version": 1,
   "securityGroups": [],
-  "displayName": "Axeptio authorized vendors",
+  "displayName": "Axeptio Consent State",
   "categories": [
     "TAG_MANAGEMENT",
     "PERSONALIZATION"
   ],
-  "description": "contains Axeptio consent",
+  "description": "Contains Axeptio consent",
   "containerContexts": [
     "WEB"
   ]
