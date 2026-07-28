@@ -1,0 +1,6 @@
+# Python bytecode / tool caches from scripts/validate-gallery.py
+__pycache__/
+.ruff_cache/
+
+# Local agent settings
+.claude/settings.local.json
