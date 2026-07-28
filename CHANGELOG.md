@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/axeptio/axeptio-gtm-public-variable/compare/v1.0.1...v1.0.2) (2026-07-28)
+
+
+### Bug Fixes
+
+* **metadata:** replace the dead documentation URL and align the homepage ([6be436c](https://github.com/axeptio/axeptio-gtm-public-variable/commit/6be436cefbe956ce98e9c3b4b0bab1d3d954601d))
+
 ## [1.0.1](https://github.com/axeptio/axeptio-gtm-public-variable/compare/v1.0.0...v1.0.1) (2026-07-28)
 
 
