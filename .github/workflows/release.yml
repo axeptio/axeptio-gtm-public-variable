@@ -1,0 +1,133 @@
+name: Release
+
+# Drives Semantic Versioning from Conventional Commits. On every push to master,
+# release-please maintains a "release PR" that bumps VERSION, updates
+# CHANGELOG.md and .release-please-manifest.json. A follow-up job adds the GTM
+# metadata.yaml version-history entry *to that same PR*, so merging it lands all
+# four files in one merge commit, then tags the commit and publishes a Release.
+#
+# Why the metadata sync happens inside the PR rather than as a push to master
+# (which is what the sibling axeptio-gtm-public-template does): master here is
+# protected with a PR requirement, enforce_admins, required signatures and no
+# bypass allowance, so nothing can push to it. The sibling's step is in fact
+# already failing for the same class of reason.
+#
+# Why not the canonical axeptio/tech-scripts caller workflows (ENG-11756)?
+# This repository is PUBLIC and tech-scripts is INTERNAL. GitHub only lets a
+# public caller repository use reusable workflows from PUBLIC repositories.
+# See docs/release-automation.md.
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      # Authenticate as axeptio-bot: the org forbids the default GITHUB_TOKEN
+      # from creating or approving PRs (can_approve_pull_request_reviews=false),
+      # so release-please cannot open its release PR without a real bot account.
+      #
+      # target-branch is intentionally omitted — it defaults to the repository's
+      # default branch, which is master, the same branch this workflow fires on.
+      - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4.4.1
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          token: ${{ secrets.BOT_GITHUB_TOKEN }}
+
+  sync-metadata:
+    name: Sync gallery version history
+    # Runs after release-please so it sees the PR release-please just wrote.
+    needs: release-please
+    runs-on: ubuntu-latest
+    steps:
+      # Locate the release PR by label rather than through the action's outputs:
+      # those are set dynamically (action.yml declares none) and differ between
+      # the "PR created" and "PR updated" paths, whereas the label is applied on
+      # both. No open release PR — e.g. the run that publishes the release —
+      # leaves `branch` empty and skips every step below.
+      - name: Locate the open release PR
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.BOT_GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          branch=$(gh pr list --repo "$REPO" --state open \
+            --label "autorelease: pending" \
+            --json headRefName --jq '.[0].headRefName // ""')
+          echo "branch=${branch}" >> "$GITHUB_OUTPUT"
+          echo "Release branch: ${branch:-<none>}"
+
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        if: ${{ steps.pr.outputs.branch != '' }}
+        with:
+          ref: ${{ steps.pr.outputs.branch }}
+          # Full history: the SHA below is resolved by walking git log.
+          fetch-depth: 0
+          token: ${{ secrets.BOT_GITHUB_TOKEN }}
+
+      # master enforces signed commits, and a pull request containing an
+      # unverified commit cannot be merged into such a branch. release-please's
+      # own commit is API-created and therefore signed; this one is pushed over
+      # git, so it must be GPG-signed or it would make the release PR
+      # unmergeable.
+      - name: Import bot GPG key
+        if: ${{ steps.pr.outputs.branch != '' }}
+        uses: crazy-max/ghaction-import-gpg@e89d40939c28e39f97cf32126055eeae86ba74ec # v6.3.0
+        with:
+          gpg_private_key: ${{ secrets.BOT_GPG_PRIVATE_KEY }}
+          git_user_signingkey: true
+          git_commit_gpgsign: true
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        if: ${{ steps.pr.outputs.branch != '' }}
+        with:
+          node-version: 20
+
+      # The gallery SHA has to be a commit that exists on master, and the
+      # release merge commit does not exist yet — so use the last commit that
+      # actually changed template.tpl. That is already this repo's convention:
+      # metadata.yaml's e2999f6b… is the "Update template.tpl" commit. The
+      # release PR never touches template.tpl, so this resolves identically on
+      # the release branch and on master.
+      - name: Resolve the release inputs
+        id: inputs
+        if: ${{ steps.pr.outputs.branch != '' }}
+        run: |
+          sha=$(git log -1 --format=%H -- template.tpl)
+          version=$(node -p "require('./.release-please-manifest.json')['.']")
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${version}" >> "$GITHUB_OUTPUT"
+          echo "Publishing ${sha} as v${version}."
+
+      - name: Sync metadata.yaml version history
+        if: ${{ steps.pr.outputs.branch != '' }}
+        env:
+          RELEASE_TAG: ${{ steps.inputs.outputs.tag }}
+          RELEASE_SHA: ${{ steps.inputs.outputs.sha }}
+        run: node scripts/update-metadata-version.mjs
+
+      # No change means template.tpl was untouched by this release, so the
+      # gallery has nothing new to publish — that is a valid outcome, not a
+      # failure.
+      - name: Commit metadata.yaml onto the release branch
+        if: ${{ steps.pr.outputs.branch != '' }}
+        # RELEASE_TAG goes through env rather than being interpolated straight
+        # into the script: never expand ${{ }} inside a run: block.
+        env:
+          RELEASE_TAG: ${{ steps.inputs.outputs.tag }}
+        run: |
+          if [[ -n "$(git status --porcelain metadata.yaml)" ]]; then
+            git add metadata.yaml
+            git commit -m "chore(metadata): sync version history for ${RELEASE_TAG}"
+            git push
+          else
+            echo "metadata.yaml already up to date; nothing to commit."
+          fi
