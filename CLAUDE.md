@@ -59,7 +59,10 @@ To exercise the template itself, import `template.tpl` into a GTM container and 
   [docs/release-automation.md](docs/release-automation.md).
 - **`master` accepts no direct pushes**, by anyone, including `axeptio-bot`: it requires a pull
   request, enforces the rules on admins, requires signed commits, and has no bypass allowance. Any
-  automation that needs to change a tracked file must do it through a pull request.
+  automation that needs to change a tracked file must do it through a pull request, and **every
+  commit it produces must be GPG-signed** — an unverified commit anywhere in a PR makes that PR
+  unmergeable, with no override available. This is why the release workflow re-signs
+  release-please's own (unsigned) commit rather than merely adding to it.
 - **Licensing is load-bearing — do not change `LICENSE`.** The Community Template Gallery
   requires it to contain **only** Apache 2.0, and removes a template whose licence does not
   match. Replacing it with Axeptio's proprietary terms is what caused SUP-1008: the sibling

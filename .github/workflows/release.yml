@@ -1,32 +1,50 @@
 name: Release
 
 # Drives Semantic Versioning from Conventional Commits. On every push to master,
-# release-please maintains a "release PR" that bumps VERSION, updates
-# CHANGELOG.md and .release-please-manifest.json. A follow-up job adds the GTM
-# metadata.yaml version-history entry *to that same PR*, so merging it lands all
-# four files in one merge commit, then tags the commit and publishes a Release.
+# release-please maintains a "release PR". A follow-up job then rewrites that
+# PR's branch so that (a) every commit on it is GPG-signed and (b) metadata.yaml
+# carries the new GTM gallery entry. Merging the PR lands VERSION, CHANGELOG.md,
+# .release-please-manifest.json and metadata.yaml in a single merge commit, and
+# the next run tags it and publishes the GitHub Release.
 #
-# Why the metadata sync happens inside the PR rather than as a push to master
-# (which is what the sibling axeptio-gtm-public-template does): master here is
-# protected with a PR requirement, enforce_admins, required signatures and no
-# bypass allowance, so nothing can push to it. The sibling's step is in fact
-# already failing for the same class of reason.
+# Why the branch is rewritten rather than just appended to:
+#   release-please creates its commit through the Git Data API, which cannot
+#   sign. master requires signed commits, and GitHub refuses to merge a pull
+#   request containing an unverified commit — the sibling repo
+#   axeptio-gtm-public-template has needed an admin override
+#   (overridden_codes: ["invalid_signature"]) on every single release merge.
+#   That escape hatch does not exist here: master has enforce_admins: true and
+#   no bypass allowance, so an unsigned release commit would be unmergeable
+#   forever. This job replays release-please's commit under the bot's GPG key.
+#
+# Why the metadata sync happens inside the PR rather than as a push to master:
+#   nothing can push to master here, for the same protection reasons.
 #
 # Why not the canonical axeptio/tech-scripts caller workflows (ENG-11756)?
-# This repository is PUBLIC and tech-scripts is INTERNAL. GitHub only lets a
-# public caller repository use reusable workflows from PUBLIC repositories.
-# See docs/release-automation.md.
+#   This repository is PUBLIC and tech-scripts is INTERNAL. GitHub only lets a
+#   public caller repository use reusable workflows from PUBLIC repositories.
+#   See docs/release-automation.md.
 on:
   push:
     branches:
       - master
+  workflow_dispatch:
 
 permissions:
   contents: write
   pull-requests: write
 
+# Never run two of these at once: release-please force-pushes the release
+# branch, so an overlapping run could wipe a sync a newer run already did.
+# cancel-in-progress must stay false — cancelling the run that re-signs the
+# branch is exactly the failure being avoided.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   release-please:
+    name: Maintain the release PR
     runs-on: ubuntu-latest
     steps:
       # Authenticate as axeptio-bot: the org forbids the default GITHUB_TOKEN
@@ -42,43 +60,47 @@ jobs:
           manifest-file: .release-please-manifest.json
           token: ${{ secrets.BOT_GITHUB_TOKEN }}
 
-  sync-metadata:
-    name: Sync gallery version history
+  sync-release-branch:
+    name: Sign the release commit and sync metadata.yaml
     # Runs after release-please so it sees the PR release-please just wrote.
     needs: release-please
     runs-on: ubuntu-latest
     steps:
       # Locate the release PR by label rather than through the action's outputs:
-      # those are set dynamically (action.yml declares none) and differ between
-      # the "PR created" and "PR updated" paths, whereas the label is applied on
-      # both. No open release PR — e.g. the run that publishes the release —
-      # leaves `branch` empty and skips every step below.
+      # the action declares no outputs in action.yml and sets them dynamically,
+      # and they differ between the "PR created", "PR updated" and "PR left
+      # alone" paths. The label is on the PR in all three. No open release PR —
+      # e.g. the run that publishes the release — leaves `branch` empty and
+      # skips every step below.
       - name: Locate the open release PR
         id: pr
         env:
           GH_TOKEN: ${{ secrets.BOT_GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
+          set -euo pipefail
           branch=$(gh pr list --repo "$REPO" --state open \
             --label "autorelease: pending" \
             --json headRefName --jq '.[0].headRefName // ""')
           echo "branch=${branch}" >> "$GITHUB_OUTPUT"
           echo "Release branch: ${branch:-<none>}"
 
+      # fetch-depth: 0 is load-bearing twice over. actions/checkout only fetches
+      # every head (+refs/heads/*:refs/remotes/origin/*) when fetch-depth <= 0,
+      # which is what gives this job origin/master with full history — needed
+      # both for the template.tpl lookup and for the merge-base below — plus the
+      # remote-tracking ref that --force-with-lease compares against. The
+      # default depth of 1 breaks all of it.
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         if: ${{ steps.pr.outputs.branch != '' }}
         with:
           ref: ${{ steps.pr.outputs.branch }}
-          # Full history: the SHA below is resolved by walking git log.
           fetch-depth: 0
           token: ${{ secrets.BOT_GITHUB_TOKEN }}
 
-      # master enforces signed commits, and a pull request containing an
-      # unverified commit cannot be merged into such a branch. release-please's
-      # own commit is API-created and therefore signed; this one is pushed over
-      # git, so it must be GPG-signed or it would make the release PR
-      # unmergeable.
-      - name: Import bot GPG key
+      # Imports the bot's key, sets git user.name/user.email from the key
+      # identity and turns on commit.gpgsign globally.
+      - name: Import the bot GPG key
         if: ${{ steps.pr.outputs.branch != '' }}
         uses: crazy-max/ghaction-import-gpg@e89d40939c28e39f97cf32126055eeae86ba74ec # v6.3.0
         with:
@@ -91,43 +113,69 @@ jobs:
         with:
           node-version: 20
 
-      # The gallery SHA has to be a commit that exists on master, and the
-      # release merge commit does not exist yet — so use the last commit that
-      # actually changed template.tpl. That is already this repo's convention:
-      # metadata.yaml's e2999f6b… is the "Update template.tpl" commit. The
-      # release PR never touches template.tpl, so this resolves identically on
-      # the release branch and on master.
-      - name: Resolve the release inputs
-        id: inputs
+      - name: Work out the release tag and the gallery SHA
+        id: facts
         if: ${{ steps.pr.outputs.branch != '' }}
         run: |
-          sha=$(git log -1 --format=%H -- template.tpl)
-          version=$(node -p "require('./.release-please-manifest.json')['.']")
-          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          # VERSION has already been bumped by release-please on this branch.
+          version=$(tr -d '[:space:]' < VERSION)
+          # The gallery publishes a template *at a commit*, so the entry must
+          # point at the last commit that actually changed template.tpl. The
+          # release merge commit does not exist yet. History simplification
+          # resolves this to the branch commit rather than the merge commit,
+          # which is the convention this repo already follows: metadata.yaml's
+          # e2999f6b… is the "Update template.tpl" commit.
+          sha=$(git log -1 --format=%H origin/master -- template.tpl)
+          if [[ -z "${sha}" ]]; then
+            echo "::error::Found no commit touching template.tpl on master." >&2
+            exit 1
+          fi
           echo "tag=v${version}" >> "$GITHUB_OUTPUT"
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
           echo "Publishing ${sha} as v${version}."
 
-      - name: Sync metadata.yaml version history
-        if: ${{ steps.pr.outputs.branch != '' }}
-        env:
-          RELEASE_TAG: ${{ steps.inputs.outputs.tag }}
-          RELEASE_SHA: ${{ steps.inputs.outputs.sha }}
-        run: node scripts/update-metadata-version.mjs
-
-      # No change means template.tpl was untouched by this release, so the
-      # gallery has nothing new to publish — that is a valid outcome, not a
-      # failure.
-      - name: Commit metadata.yaml onto the release branch
+      - name: Re-sign the release commit and sync metadata.yaml
         if: ${{ steps.pr.outputs.branch != '' }}
         # RELEASE_TAG goes through env rather than being interpolated straight
         # into the script: never expand ${{ }} inside a run: block.
         env:
-          RELEASE_TAG: ${{ steps.inputs.outputs.tag }}
+          RELEASE_TAG: ${{ steps.facts.outputs.tag }}
+          RELEASE_SHA: ${{ steps.facts.outputs.sha }}
+          BRANCH: ${{ steps.pr.outputs.branch }}
         run: |
+          set -euo pipefail
+
+          # release-please's commit is always unsigned (%G? == N); every commit
+          # this job makes is signed. A signed tip therefore means the branch
+          # has already been processed and release-please has not rewritten it
+          # since — nothing to do.
+          if [[ "$(git log -1 --format='%G?' HEAD)" != "N" ]]; then
+            echo "Release branch tip is already signed; nothing to do."
+            exit 0
+          fi
+
+          orig=$(git rev-parse HEAD)
+          # Not origin/master: master may have moved on since release-please cut
+          # this branch, and resetting onto a newer master would silently revert
+          # whatever landed in between. merge-base is where the branch was cut.
+          base=$(git merge-base HEAD origin/master)
+
+          # Replay release-please's commit — same tree, same message, same
+          # author — this time GPG-signed.
+          git reset --soft "${base}"
+          git commit -S -C "${orig}"
+
+          node scripts/update-metadata-version.mjs
           if [[ -n "$(git status --porcelain metadata.yaml)" ]]; then
             git add metadata.yaml
-            git commit -m "chore(metadata): sync version history for ${RELEASE_TAG}"
-            git push
+            git commit -S -m "chore(metadata): sync version history for ${RELEASE_TAG}"
           else
-            echo "metadata.yaml already up to date; nothing to commit."
+            echo "template.tpl unchanged in this release; no new gallery entry."
           fi
+
+          # --force-with-lease pinned to the SHA checked out above: if
+          # release-please force-pushed again while this job ran, fail loudly
+          # rather than clobber it. Its next run re-triggers this job.
+          git push --force-with-lease="${BRANCH}:${orig}" \
+                   origin "HEAD:refs/heads/${BRANCH}"

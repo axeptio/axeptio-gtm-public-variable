@@ -42,8 +42,8 @@ history before merging; `Lint commits` will reject a non-conventional commit any
 
   | Job | What it does |
   | --- | --- |
-  | `release-please` | scans commits since the last release, opens or updates a release PR that bumps `VERSION`, `CHANGELOG.md` and `.release-please-manifest.json`. Merging that PR tags the commit and publishes a GitHub Release. |
-  | `Sync gallery version history` | finds the open release PR by its `autorelease: pending` label, runs `scripts/update-metadata-version.mjs`, and pushes a GPG-signed `chore(metadata): sync version history for <tag>` commit **onto the release branch**. |
+  | `Maintain the release PR` | release-please scans commits since the last release, opens or updates a release PR that bumps `VERSION`, `CHANGELOG.md` and `.release-please-manifest.json`. Merging that PR tags the commit and publishes a GitHub Release. |
+  | `Sign the release commit and sync metadata.yaml` | finds the open release PR by its `autorelease: pending` label, replays release-please's commit under the bot's GPG key, adds the `chore(metadata): sync version history for <tag>` commit, and force-pushes the branch. |
 
 ## GTM Gallery version history
 
@@ -82,15 +82,37 @@ organisation forbids `GITHUB_TOKEN` from creating or approving pull requests
 (`can_approve_pull_request_reviews: false`), so release-please cannot open its release PR without
 a real bot account.
 
-`master` also enforces **signed commits**, and a pull request containing an unverified commit
-cannot be merged into such a branch. release-please's own commit is created through the GitHub API
-and is therefore signed automatically; the metadata sync commit is pushed over git, so it is
-GPG-signed with the bot's key first.
+`master` also enforces **signed commits**, and GitHub refuses to merge a pull request containing an
+unverified commit into such a branch (block code `invalid_signature`, *"Commits must have verified
+signatures"*).
+
+**release-please's own commit is unsigned.** It is created through the Git Data API, which does not
+sign, so `chore(master): release X.Y.Z` lands as `verified: false, reason: unsigned`. On the
+sibling `axeptio-gtm-public-template` this is survivable only because that repo has
+`enforce_admins: false` — the org audit log shows a `protected_branch.policy_override` with
+`overridden_codes: ["invalid_signature", …]` on *every* release merge there. This repo has
+`enforce_admins: true` and no bypass allowance, so there is no override: an unsigned release commit
+would make the release PR unmergeable, permanently.
+
+The `Sign the release commit and sync metadata.yaml` job therefore **replays** release-please's
+commit — same tree, same message, same author — under the bot's GPG key, appends the metadata
+commit (also signed), and force-pushes the branch with `--force-with-lease`. Every commit in the
+release PR then verifies, and the PR merges with no override.
+
+Rewriting the branch is safe: release-please never reads the release branch's commits. It matches
+the PR by `headBranchName` among open PRs carrying the `autorelease: pending` label, builds its
+file changes from `master`, and builds the release itself from the merged PR's title, body and
+merge commit. If it force-pushes a fresh unsigned commit on a later run, this job simply re-signs —
+the flow is self-healing, and the "tip is already signed" guard makes a re-run a no-op.
 
 | Secret | Used for | Source |
-| --------------------- | ------------------------------------ | --------- |
-| `BOT_GITHUB_TOKEN` | release PR, release, metadata commit | Org-level |
-| `BOT_GPG_PRIVATE_KEY` | signing the metadata sync commit | Org-level |
+| --------------------- | -------------------------------------------- | --------- |
+| `BOT_GITHUB_TOKEN` | release PR, release, pushing the release branch | Org-level |
+| `BOT_GPG_PRIVATE_KEY` | signing every commit on the release branch | Org-level |
+
+Both are org-level secrets shared with this repository — confirm with
+`gh api repos/axeptio/axeptio-gtm-public-variable/actions/organization-secrets` (which needs no
+`admin:org` scope, unlike listing the org's secrets directly).
 
 ## Why not the canonical Axeptio release automation?
 
