@@ -43,8 +43,18 @@ delists the template 2–3 days later with no feedback from Google, which is exa
 happened on the sibling repo. CI runs it on every PR **and** on pushes to `master`; run it locally
 before touching `LICENSE`, `metadata.yaml` or `template.tpl`.
 
-To exercise the template itself, import `template.tpl` into a GTM container and use the
-**Tests** tab (the `___TESTS___` block — currently empty).
+It also checks `template.tpl` for **internal consistency**, which is not a gallery rule but has
+nowhere else to be caught: every block present and parsing (JSON for `___INFO___`,
+`___TEMPLATE_PARAMETERS___`, `___WEB_PERMISSIONS___`; YAML for `___TESTS___`), `read_data_layer`
+pinned to `allowedKeys: specific`, the `signal` selector and the `read_data_layer` `keyPatterns`
+offering exactly the same keys, and `node --check` over the sandboxed JS and every test scenario.
+The selector/permission parity check is the load-bearing one — an option with no matching key
+pattern returns `undefined` at runtime with no error anywhere.
+
+**CI cannot run the `___TESTS___` scenarios.** The Test API (`runCode`, `mock`, `assertThat`) only
+exists inside Tag Manager's proprietary sandboxed-JS interpreter; there is no CLI, no API endpoint,
+and no third-party runner. To exercise the template, import `template.tpl` into a GTM container and
+use the **Tests** tab, then confirm real behaviour in **Preview** against a page running the widget.
 
 ## Conventions & Patterns
 

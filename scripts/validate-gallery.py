@@ -8,6 +8,13 @@ place a violation can be caught before it ships.
 
 Contract: https://developers.google.com/tag-platform/tag-manager/templates/gallery
 
+Beyond the gallery contract this also checks template.tpl for *internal*
+consistency — that its blocks parse, and that the signal selector and the
+read_data_layer permission agree. Those are not gallery rules, but nothing else
+catches them: Tag Manager's sandbox is proprietary and has no CLI, so the
+___TESTS___ scenarios can only be executed from the Tests tab of the GTM UI. A
+malformed block otherwise stays green here and fails on import.
+
 Run locally from the repository root:
 
     python3 scripts/validate-gallery.py
@@ -24,14 +31,36 @@ the first, so one CI run tells you everything that is wrong.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 METADATA_PATH = Path("metadata.yaml")
 TEMPLATE_PATH = Path("template.tpl")
 LICENSE_PATH = Path("LICENSE")
+
+# A template.tpl is a sequence of ___BLOCK___ markers, each alone on its line,
+# followed by that block's body. Google's exporter always emits them in this order.
+BLOCK_MARKER_RE = re.compile(r"^___([A-Z_]+)___$", re.M)
+
+# Blocks Tag Manager requires in a web template. ___NOTES___ is optional.
+REQUIRED_BLOCKS = (
+    "TERMS_OF_SERVICE",
+    "INFO",
+    "TEMPLATE_PARAMETERS",
+    "SANDBOXED_JS_FOR_WEB_TEMPLATE",
+    "WEB_PERMISSIONS",
+    "TESTS",
+)
+
+# The parameter that selects which dataLayer key the variable returns. Its
+# selectItems must stay in lockstep with the read_data_layer keyPatterns below —
+# an option with no matching pattern is silently unreadable at runtime.
+SIGNAL_PARAM_NAME = "signal"
+READ_DATA_LAYER_PERMISSION = "read_data_layer"
 
 # The complete set of category values the gallery accepts.
 ALLOWED_CATEGORIES = {
@@ -239,23 +268,59 @@ def check_latest_marker() -> None:
         )
 
 
-def check_template_info() -> None:
+def load_template_blocks() -> dict | None:
+    """Split template.tpl into {block name: body}, or None if it is unusable."""
     if not TEMPLATE_PATH.is_file():
-        return
+        return None
     # UTF-8 with BOM — decoding as plain utf-8 corrupts the first marker.
     source = TEMPLATE_PATH.read_text(encoding="utf-8-sig")
 
-    try:
-        start = source.index("___INFO___") + len("___INFO___")
-        end = source.index("___TEMPLATE_PARAMETERS___")
-    except ValueError:
-        fail("template-info", "could not locate the ___INFO___ block in template.tpl")
-        return
+    markers = list(BLOCK_MARKER_RE.finditer(source))
+    if not markers:
+        fail("template-blocks", "template.tpl contains no ___BLOCK___ markers")
+        return None
 
+    blocks = {}
+    duplicated = []
+    for index, marker in enumerate(markers):
+        name = marker.group(1)
+        end = markers[index + 1].start() if index + 1 < len(markers) else len(source)
+        body = source[marker.end() : end].strip()
+        # Keep the first occurrence and report the rest. Letting a later block win
+        # would validate something Tag Manager may not use, and — worse — masks the
+        # duplicate behind whatever error the wrong body happens to produce.
+        if name in blocks:
+            duplicated.append(name)
+            continue
+        blocks[name] = body
+
+    for name in sorted(set(duplicated)):
+        fail(
+            "template-blocks",
+            f"___{name}___ appears more than once; a template must declare each block once",
+        )
+
+    for name in REQUIRED_BLOCKS:
+        if name not in blocks:
+            fail("template-blocks", f"template.tpl has no ___{name}___ block")
+    return blocks
+
+
+def parse_json_block(blocks: dict, name: str, check: str):
+    """Parse one JSON block, reporting a parse error against `check`."""
+    body = blocks.get(name)
+    if body is None:
+        return None
     try:
-        info = json.loads(source[start:end].strip())
+        return json.loads(body)
     except json.JSONDecodeError as exc:
-        fail("template-info", f"___INFO___ is not valid JSON: {exc}")
+        fail(check, f"___{name}___ is not valid JSON: {exc}")
+        return None
+
+
+def check_template_info(blocks: dict) -> None:
+    info = parse_json_block(blocks, "INFO", "template-info")
+    if info is None:
         return
 
     categories = info.get("categories")
@@ -275,6 +340,239 @@ def check_template_info() -> None:
     unknown = [c for c in categories if c not in ALLOWED_CATEGORIES]
     if unknown:
         fail("template-categories", f"unsupported category value(s): {unknown}")
+
+
+def read_data_layer_key_patterns(permissions: list) -> set | None:
+    """The keys read_data_layer is allowed to read, or None if it is not declared."""
+    for entry in permissions:
+        instance = (entry or {}).get("instance") or {}
+        if (instance.get("key") or {}).get("publicId") != READ_DATA_LAYER_PERMISSION:
+            continue
+
+        params = {
+            p.get("key"): p.get("value") or {} for p in instance.get("param") or []
+        }
+
+        # keyPatterns only constrains anything when allowedKeys is "specific";
+        # "any" makes the list decorative and hands the template the whole dataLayer.
+        allowed = (params.get("allowedKeys") or {}).get("string")
+        if allowed != "specific":
+            fail(
+                "template-permissions",
+                f"read_data_layer uses allowedKeys={allowed!r}; it must be 'specific' "
+                "so the template only reads the keys it declares",
+            )
+            return None
+
+        return {
+            item.get("string")
+            for item in (params.get("keyPatterns") or {}).get("listItem") or []
+        }
+    return None
+
+
+def check_signal_parity(parameters: list, permissions: list) -> None:
+    """The signal selector and read_data_layer must offer exactly the same keys.
+
+    Skipped when the template declares no `signal` selector — the parameter block was
+    empty before the selector existed, and this is a consistency check, not a gallery
+    rule. When it is present, an option missing from keyPatterns resolves to undefined
+    at runtime with no error anywhere, which is the failure this exists to catch.
+    """
+    selector = next(
+        (
+            p
+            for p in parameters
+            if isinstance(p, dict)
+            and p.get("name") == SIGNAL_PARAM_NAME
+            and p.get("type") == "SELECT"
+        ),
+        None,
+    )
+    if selector is None:
+        return
+
+    # Validate the shape before comparing. A non-mapping entry used to raise
+    # AttributeError, and one missing `value` put None in the set, which produced a
+    # nonsense "option [None] is missing" message and would raise TypeError in
+    # sorted() as soon as a second one appeared.
+    items = selector.get("selectItems")
+    if not isinstance(items, list) or not items:
+        fail("template-signal", f"`{SIGNAL_PARAM_NAME}` SELECT has no selectItems")
+        return
+
+    options = set()
+    for position, item in enumerate(items):
+        if not isinstance(item, dict) or not isinstance(item.get("value"), str):
+            fail(
+                "template-signal",
+                f"`{SIGNAL_PARAM_NAME}` selectItems[{position}] is not an object with "
+                f"a string `value`: {item!r}",
+            )
+            return
+        options.add(item["value"])
+
+    default = selector.get("defaultValue")
+    if default not in options:
+        fail(
+            "template-signal",
+            f"`{SIGNAL_PARAM_NAME}` defaultValue {default!r} is not one of its "
+            f"selectItems {sorted(options)}",
+        )
+
+    patterns = read_data_layer_key_patterns(permissions)
+    if patterns is None:
+        return
+
+    unreadable = sorted(options - patterns)
+    if unreadable:
+        fail(
+            "template-signal",
+            f"selector option(s) {unreadable} are missing from the read_data_layer "
+            "keyPatterns, so they would silently return undefined",
+        )
+    unreachable = sorted(patterns - options)
+    if unreachable:
+        fail(
+            "template-signal",
+            f"read_data_layer grants {unreachable}, which no selector option can "
+            "reach; drop the pattern or add the option",
+        )
+
+
+def check_tests(blocks: dict) -> None:
+    """The ___TESTS___ block must at least be well-formed and non-empty.
+
+    Tag Manager's sandbox is proprietary and has no runner outside the GTM UI, so this
+    cannot execute the scenarios — only prove they would load.
+    """
+    body = blocks.get("TESTS")
+    if body is None:
+        return
+    try:
+        import yaml
+    except ImportError:
+        return  # already reported by load_metadata
+
+    try:
+        parsed = yaml.safe_load(body)
+    except Exception as exc:  # noqa: BLE001 - any parse error is a failure
+        fail("template-tests", f"___TESTS___ is not valid YAML: {exc}")
+        return
+
+    if parsed is None:
+        fail(
+            "template-tests", "___TESTS___ is empty; it must declare a `scenarios` list"
+        )
+        return
+    if not isinstance(parsed, dict):
+        fail(
+            "template-tests",
+            "___TESTS___ must be a mapping with a `scenarios` key, got "
+            f"{type(parsed).__name__}",
+        )
+        return
+
+    scenarios = parsed.get("scenarios")
+    if scenarios is None:
+        fail("template-tests", "___TESTS___ has no `scenarios` key")
+        return
+    if not isinstance(scenarios, list):
+        fail("template-tests", "___TESTS___ `scenarios` is not a list")
+        return
+    if not scenarios:
+        warn(
+            "template-tests",
+            "___TESTS___ declares no scenarios; the template has no unit tests",
+        )
+        return
+
+    seen = set()
+    for index, scenario in enumerate(scenarios):
+        if not isinstance(scenario, dict):
+            fail("template-tests", f"scenarios[{index}] is not a mapping")
+            continue
+        name = scenario.get("name")
+        if not isinstance(name, str) or not name.strip():
+            fail("template-tests", f"scenarios[{index}] has no `name`")
+        elif name in seen:
+            fail("template-tests", f"duplicate scenario name {name!r}")
+        else:
+            seen.add(name)
+        if not isinstance(scenario.get("code"), str) or not scenario["code"].strip():
+            fail("template-tests", f"scenarios[{index}] has no `code`")
+
+
+def node_syntax_error(code: str) -> str | None:
+    """Syntax-check a fragment with `node --check`, or None if it parses.
+
+    Wrapped in a function expression because the sandboxed JS block uses a top-level
+    `return`, which is illegal in a script. Reported line numbers are therefore off
+    by one. This checks syntax only — it does not emulate the sandbox, which rejects
+    plenty of syntactically valid JavaScript.
+
+    The temp file is closed before node opens it: Windows locks an open handle, so
+    holding it would make the check fail for reasons that have nothing to do with the
+    template.
+    """
+    handle, path = tempfile.mkstemp(suffix=".js")
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as js:
+            js.write("(function (data) {\n" + code + "\n});\n")
+        result = subprocess.run(
+            ["node", "--check", path], capture_output=True, text=True
+        )
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+    if result.returncode == 0:
+        return None
+
+    # node prints the offending source, then `SyntaxError: ...`, then a stack and a
+    # version banner. Pick out the diagnosis; the banner is the last line and says
+    # nothing. Fall back to the raw output rather than swallowing an unknown format.
+    output = (result.stderr or result.stdout).strip()
+    for line in output.splitlines():
+        if re.match(r"^\w*Error: ", line.strip()):
+            return line.strip()
+    return " ".join(output.split())
+
+
+def check_javascript_syntax(blocks: dict) -> None:
+    if subprocess.run(["node", "--version"], capture_output=True).returncode != 0:
+        warn("template-js", "node is not on PATH; skipped the JavaScript syntax check")
+        return
+
+    fragments = [
+        (
+            "___SANDBOXED_JS_FOR_WEB_TEMPLATE___",
+            blocks.get("SANDBOXED_JS_FOR_WEB_TEMPLATE"),
+        )
+    ]
+
+    # Any shape problem here is already reported by check_tests, so this only needs to
+    # skip what it cannot read rather than diagnose it.
+    try:
+        import yaml
+
+        parsed = yaml.safe_load(blocks.get("TESTS") or "")
+    except Exception:  # noqa: BLE001 - a YAML parse error is reported by check_tests
+        parsed = None
+
+    scenarios = parsed.get("scenarios") if isinstance(parsed, dict) else None
+    for scenario in scenarios if isinstance(scenarios, list) else []:
+        if isinstance(scenario, dict) and isinstance(scenario.get("code"), str):
+            fragments.append((f"scenario {scenario.get('name')!r}", scenario["code"]))
+
+    for label, code in fragments:
+        if not code:
+            continue
+        error = node_syntax_error(code)
+        if error:
+            fail("template-js", f"{label} does not parse: {error}")
 
 
 def check_issues_enabled() -> None:
@@ -304,7 +602,19 @@ def main() -> int:
     if data is not None:
         check_versions(check_metadata_fields(data))
         check_latest_marker()
-    check_template_info()
+
+    blocks = load_template_blocks()
+    if blocks is not None:
+        check_template_info(blocks)
+        parameters = parse_json_block(blocks, "TEMPLATE_PARAMETERS", "template-params")
+        permissions = parse_json_block(
+            blocks, "WEB_PERMISSIONS", "template-permissions"
+        )
+        if isinstance(parameters, list) and isinstance(permissions, list):
+            check_signal_parity(parameters, permissions)
+        check_tests(blocks)
+        check_javascript_syntax(blocks)
+
     check_issues_enabled()
 
     for warning in warnings:
