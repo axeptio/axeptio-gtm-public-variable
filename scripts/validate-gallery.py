@@ -31,6 +31,7 @@ the first, so one CI run tells you everything that is wrong.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -280,9 +281,24 @@ def load_template_blocks() -> dict | None:
         return None
 
     blocks = {}
+    duplicated = []
     for index, marker in enumerate(markers):
+        name = marker.group(1)
         end = markers[index + 1].start() if index + 1 < len(markers) else len(source)
-        blocks[marker.group(1)] = source[marker.end() : end].strip()
+        body = source[marker.end() : end].strip()
+        # Keep the first occurrence and report the rest. Letting a later block win
+        # would validate something Tag Manager may not use, and — worse — masks the
+        # duplicate behind whatever error the wrong body happens to produce.
+        if name in blocks:
+            duplicated.append(name)
+            continue
+        blocks[name] = body
+
+    for name in sorted(set(duplicated)):
+        fail(
+            "template-blocks",
+            f"___{name}___ appears more than once; a template must declare each block once",
+        )
 
     for name in REQUIRED_BLOCKS:
         if name not in blocks:
@@ -376,10 +392,25 @@ def check_signal_parity(parameters: list, permissions: list) -> None:
     if selector is None:
         return
 
-    options = {i.get("value") for i in selector.get("selectItems") or []}
-    if not options:
+    # Validate the shape before comparing. A non-mapping entry used to raise
+    # AttributeError, and one missing `value` put None in the set, which produced a
+    # nonsense "option [None] is missing" message and would raise TypeError in
+    # sorted() as soon as a second one appeared.
+    items = selector.get("selectItems")
+    if not isinstance(items, list) or not items:
         fail("template-signal", f"`{SIGNAL_PARAM_NAME}` SELECT has no selectItems")
         return
+
+    options = set()
+    for position, item in enumerate(items):
+        if not isinstance(item, dict) or not isinstance(item.get("value"), str):
+            fail(
+                "template-signal",
+                f"`{SIGNAL_PARAM_NAME}` selectItems[{position}] is not an object with "
+                f"a string `value`: {item!r}",
+            )
+            return
+        options.add(item["value"])
 
     default = selector.get("defaultValue")
     if default not in options:
@@ -429,7 +460,20 @@ def check_tests(blocks: dict) -> None:
         fail("template-tests", f"___TESTS___ is not valid YAML: {exc}")
         return
 
-    scenarios = (parsed or {}).get("scenarios")
+    if parsed is None:
+        fail(
+            "template-tests", "___TESTS___ is empty; it must declare a `scenarios` list"
+        )
+        return
+    if not isinstance(parsed, dict):
+        fail(
+            "template-tests",
+            "___TESTS___ must be a mapping with a `scenarios` key, got "
+            f"{type(parsed).__name__}",
+        )
+        return
+
+    scenarios = parsed.get("scenarios")
     if scenarios is None:
         fail("template-tests", "___TESTS___ has no `scenarios` key")
         return
@@ -466,13 +510,24 @@ def node_syntax_error(code: str) -> str | None:
     `return`, which is illegal in a script. Reported line numbers are therefore off
     by one. This checks syntax only — it does not emulate the sandbox, which rejects
     plenty of syntactically valid JavaScript.
+
+    The temp file is closed before node opens it: Windows locks an open handle, so
+    holding it would make the check fail for reasons that have nothing to do with the
+    template.
     """
-    with tempfile.NamedTemporaryFile("w", suffix=".js", encoding="utf-8") as handle:
-        handle.write("(function (data) {\n" + code + "\n});\n")
-        handle.flush()
+    handle, path = tempfile.mkstemp(suffix=".js")
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as js:
+            js.write("(function (data) {\n" + code + "\n});\n")
         result = subprocess.run(
-            ["node", "--check", handle.name], capture_output=True, text=True
+            ["node", "--check", path], capture_output=True, text=True
         )
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
     if result.returncode == 0:
         return None
 
@@ -498,17 +553,19 @@ def check_javascript_syntax(blocks: dict) -> None:
         )
     ]
 
+    # Any shape problem here is already reported by check_tests, so this only needs to
+    # skip what it cannot read rather than diagnose it.
     try:
         import yaml
 
-        scenarios = (yaml.safe_load(blocks.get("TESTS") or "") or {}).get("scenarios")
-        for scenario in scenarios or []:
-            if isinstance(scenario, dict) and isinstance(scenario.get("code"), str):
-                fragments.append(
-                    (f"scenario {scenario.get('name')!r}", scenario["code"])
-                )
-    except Exception:  # noqa: BLE001 - shape problems are already reported by check_tests
-        pass
+        parsed = yaml.safe_load(blocks.get("TESTS") or "")
+    except Exception:  # noqa: BLE001 - a YAML parse error is reported by check_tests
+        parsed = None
+
+    scenarios = parsed.get("scenarios") if isinstance(parsed, dict) else None
+    for scenario in scenarios if isinstance(scenarios, list) else []:
+        if isinstance(scenario, dict) and isinstance(scenario.get("code"), str):
+            fragments.append((f"scenario {scenario.get('name')!r}", scenario["code"]))
 
     for label, code in fragments:
         if not code:
