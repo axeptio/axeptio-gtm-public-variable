@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.3](https://github.com/axeptio/axeptio-gtm-public-variable/compare/v1.0.2...v1.0.3) (2026-07-29)
+
+
+### Bug Fixes
+
+* **ci:** make the template validator fail cleanly on malformed input ([3cb18c1](https://github.com/axeptio/axeptio-gtm-public-variable/commit/3cb18c1a3302bd11596ea2a95d23b574893e4d83))
+
 ## [1.0.2](https://github.com/axeptio/axeptio-gtm-public-variable/compare/v1.0.1...v1.0.2) (2026-07-28)
 
 
