@@ -62,6 +62,16 @@ REQUIRED_BLOCKS = (
 SIGNAL_PARAM_NAME = "signal"
 READ_DATA_LAYER_PERMISSION = "read_data_layer"
 
+# The parameter that selects where a signal is read from. Only its own shape is
+# checked; which sources exist is a template decision, not a gallery rule.
+SOURCE_PARAM_NAME = "source"
+
+# Cookie-name fields are TEXT parameters named like `jsonCookieName`. Their
+# defaults must all appear in the get_cookies permission — getCookieValues on an
+# undeclared name is refused at runtime, and the variable just returns undefined.
+COOKIE_NAME_PARAM_SUFFIX = "CookieName"
+GET_COOKIES_PERMISSION = "get_cookies"
+
 # The complete set of category values the gallery accepts.
 ALLOWED_CATEGORIES = {
     "ADVERTISING",
@@ -371,6 +381,148 @@ def read_data_layer_key_patterns(permissions: list) -> set | None:
     return None
 
 
+def flatten_parameters(parameters: list) -> list:
+    """Every parameter, including those nested in a GROUP's subParams.
+
+    Tag Manager exposes a group's subParams on `data` exactly like a top-level field,
+    so a check that only walked the outer list would miss them entirely.
+    """
+    flat = []
+    for parameter in parameters:
+        if not isinstance(parameter, dict):
+            continue
+        flat.append(parameter)
+        subparams = parameter.get("subParams")
+        if isinstance(subparams, list):
+            flat.extend(flatten_parameters(subparams))
+    return flat
+
+
+def select_options(parameters: list, name: str, check: str) -> set | None:
+    """The values a SELECT offers, or None if it is absent or malformed.
+
+    Also enforces that its defaultValue is one of them: a default outside the list
+    leaves the field blank on a fresh instance, so the template falls through to
+    whatever its code treats as missing.
+    """
+    selector = next(
+        (p for p in parameters if p.get("name") == name and p.get("type") == "SELECT"),
+        None,
+    )
+    if selector is None:
+        return None
+
+    # Validate the shape before comparing. A non-mapping entry used to raise
+    # AttributeError, and one missing `value` put None in the set, which produced a
+    # nonsense "option [None] is missing" message and would raise TypeError in
+    # sorted() as soon as a second one appeared.
+    items = selector.get("selectItems")
+    if not isinstance(items, list) or not items:
+        fail(check, f"`{name}` SELECT has no selectItems")
+        return None
+
+    options = set()
+    for position, item in enumerate(items):
+        if not isinstance(item, dict) or not isinstance(item.get("value"), str):
+            fail(
+                check,
+                f"`{name}` selectItems[{position}] is not an object with "
+                f"a string `value`: {item!r}",
+            )
+            return None
+        options.add(item["value"])
+
+    default = selector.get("defaultValue")
+    if default not in options:
+        fail(
+            check,
+            f"`{name}` defaultValue {default!r} is not one of its "
+            f"selectItems {sorted(options)}",
+        )
+    return options
+
+
+def cookie_permission_names(permissions: list) -> set | None:
+    """The cookies get_cookies is allowed to read, or None if it is not declared."""
+    for entry in permissions:
+        instance = (entry or {}).get("instance") or {}
+        if (instance.get("key") or {}).get("publicId") != GET_COOKIES_PERMISSION:
+            continue
+
+        params = {
+            p.get("key"): p.get("value") or {} for p in instance.get("param") or []
+        }
+
+        # As with read_data_layer, the name list only constrains anything when access
+        # is "specific"; "any" hands the template every cookie on the domain.
+        access = (params.get("cookieAccess") or {}).get("string")
+        if access != "specific":
+            fail(
+                "template-permissions",
+                f"get_cookies uses cookieAccess={access!r}; it must be 'specific' "
+                "so the template only reads the cookies it declares",
+            )
+            return None
+
+        return {
+            item.get("string")
+            for item in (params.get("cookieNames") or {}).get("listItem") or []
+        }
+    return None
+
+
+def check_cookie_parity(parameters: list, permissions: list) -> None:
+    """Every cookie-name field's default must be readable under get_cookies.
+
+    Skipped when the template has no cookie-name fields. When it does, a default
+    missing from the permission makes getCookieValues return nothing at runtime —
+    the template silently loses its cookie fallback with no error to notice.
+    """
+    defaults = {
+        p["defaultValue"]
+        for p in parameters
+        if p.get("type") == "TEXT"
+        and isinstance(p.get("name"), str)
+        and p["name"].endswith(COOKIE_NAME_PARAM_SUFFIX)
+        and isinstance(p.get("defaultValue"), str)
+        and p["defaultValue"]
+    }
+    if not defaults:
+        return
+
+    declared = cookie_permission_names(permissions)
+    if declared is None:
+        # None covers two cases: no permission at all, which nothing else reports, and
+        # a permission that is present but malformed, which cookie_permission_names has
+        # already failed on. Only diagnose the first, or one mistake reads as two.
+        if not any(
+            ((entry or {}).get("instance") or {}).get("key", {}).get("publicId")
+            == GET_COOKIES_PERMISSION
+            for entry in permissions
+        ):
+            fail(
+                "template-cookies",
+                f"the template has cookie-name field(s) {sorted(defaults)} but declares "
+                f"no {GET_COOKIES_PERMISSION} permission, so it cannot read any cookie",
+            )
+        return
+
+    unreadable = sorted(defaults - declared)
+    if unreadable:
+        fail(
+            "template-cookies",
+            f"cookie-name default(s) {unreadable} are missing from the "
+            f"{GET_COOKIES_PERMISSION} cookieNames, so they would silently read nothing",
+        )
+    unreachable = sorted(declared - defaults)
+    if unreachable:
+        fail(
+            "template-cookies",
+            f"{GET_COOKIES_PERMISSION} grants {unreachable}, which no cookie-name "
+            "field defaults to; drop the name or add the field",
+        )
+
+
 def check_signal_parity(parameters: list, permissions: list) -> None:
     """The signal selector and read_data_layer must offer exactly the same keys.
 
@@ -379,46 +531,9 @@ def check_signal_parity(parameters: list, permissions: list) -> None:
     rule. When it is present, an option missing from keyPatterns resolves to undefined
     at runtime with no error anywhere, which is the failure this exists to catch.
     """
-    selector = next(
-        (
-            p
-            for p in parameters
-            if isinstance(p, dict)
-            and p.get("name") == SIGNAL_PARAM_NAME
-            and p.get("type") == "SELECT"
-        ),
-        None,
-    )
-    if selector is None:
+    options = select_options(parameters, SIGNAL_PARAM_NAME, "template-signal")
+    if options is None:
         return
-
-    # Validate the shape before comparing. A non-mapping entry used to raise
-    # AttributeError, and one missing `value` put None in the set, which produced a
-    # nonsense "option [None] is missing" message and would raise TypeError in
-    # sorted() as soon as a second one appeared.
-    items = selector.get("selectItems")
-    if not isinstance(items, list) or not items:
-        fail("template-signal", f"`{SIGNAL_PARAM_NAME}` SELECT has no selectItems")
-        return
-
-    options = set()
-    for position, item in enumerate(items):
-        if not isinstance(item, dict) or not isinstance(item.get("value"), str):
-            fail(
-                "template-signal",
-                f"`{SIGNAL_PARAM_NAME}` selectItems[{position}] is not an object with "
-                f"a string `value`: {item!r}",
-            )
-            return
-        options.add(item["value"])
-
-    default = selector.get("defaultValue")
-    if default not in options:
-        fail(
-            "template-signal",
-            f"`{SIGNAL_PARAM_NAME}` defaultValue {default!r} is not one of its "
-            f"selectItems {sorted(options)}",
-        )
 
     patterns = read_data_layer_key_patterns(permissions)
     if patterns is None:
@@ -611,7 +726,12 @@ def main() -> int:
             blocks, "WEB_PERMISSIONS", "template-permissions"
         )
         if isinstance(parameters, list) and isinstance(permissions, list):
-            check_signal_parity(parameters, permissions)
+            # Group subParams reach `data` like any other field, so every check below
+            # walks the flattened list rather than only the outer one.
+            flat = flatten_parameters(parameters)
+            check_signal_parity(flat, permissions)
+            select_options(flat, SOURCE_PARAM_NAME, "template-source")
+            check_cookie_parity(flat, permissions)
         check_tests(blocks)
         check_javascript_syntax(blocks)
 
