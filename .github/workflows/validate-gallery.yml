@@ -34,6 +34,14 @@ jobs:
         with:
           python-version: '3.12'
 
+      # The template.tpl JavaScript syntax check shells out to `node --check`, and
+      # degrades to a warning when node is absent. Pin it explicitly rather than
+      # relying on whatever the runner image ships, so the check cannot quietly
+      # stop running.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '20'
+
       - name: Install PyYAML
         run: pip install --disable-pip-version-check pyyaml
 
