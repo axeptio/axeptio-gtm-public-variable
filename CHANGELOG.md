@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.0](https://github.com/axeptio/axeptio-gtm-public-variable/compare/v1.0.3...v1.1.0) (2026-08-05)
+
+
+### Features
+
+* **template:** expose Google Consent Mode and GPP signals ([ac9be22](https://github.com/axeptio/axeptio-gtm-public-variable/commit/ac9be22cc81564d942a4e65aab8cacf35c179114))
+* **template:** fall back to the Axeptio cookies when the dataLayer is not ready ([c537910](https://github.com/axeptio/axeptio-gtm-public-variable/commit/c537910a8d05d71842a488c531c9faa426430d14))
+
 ## [1.0.3](https://github.com/axeptio/axeptio-gtm-public-variable/compare/v1.0.2...v1.0.3) (2026-07-29)
 
 
