@@ -21,6 +21,29 @@ use GitHub pull requests for this purpose. Consult
 [GitHub Help](https://help.github.com/articles/about-pull-requests/) for more
 information on using pull requests.
 
+## Testing a template change
+
+The `___TESTS___` block in `template.tpl` holds YAML test scenarios. They run in two places from
+that one definition — in the GTM UI **Tests** tab, and headlessly in CI:
+
+```bash
+npm ci
+npm test
+```
+
+The runner executes the **real** `___SANDBOXED_JS_FOR_WEB_TEMPLATE___` source, so a change that
+breaks the variable breaks a test. If you change template behaviour, add a scenario for it rather
+than a separate test file.
+
+Scenario **names** may only contain letters, numbers, spaces, hyphens and underscores. GTM's editor
+silently refuses to save a template whose test name contains punctuation such as `.` or `/`, so the
+runner fails the build on one instead of letting you discover it in the UI.
+
+Write scenarios that can actually fail. A scenario asserting only that a result is `undefined` often
+passes for the wrong reason — several distinct paths through this template return `undefined`. Where
+the distinction matters, assert on *how* the answer was reached (`assertApi(...).wasNotCalled()`),
+not just on the value.
+
 ## The gallery contract
 
 This variable template is published through the
