@@ -83,18 +83,28 @@ A commit / PR title must follow:
 
 **Allowed types**
 
-| Type       | Effect on version | Use for                                    |
-| ---------- | ----------------- | ------------------------------------------ |
-| `feat`     | minor bump        | a new feature                              |
-| `fix`      | patch bump        | a bug fix                                  |
-| `docs`     | none              | documentation only                         |
-| `refactor` | none              | code change that isn't a fix or feature    |
-| `perf`     | none              | performance improvement                    |
-| `test`     | none              | tests                                      |
-| `ci`       | none              | CI / GitHub Actions changes                |
-| `build`    | none              | build system or dependencies               |
-| `chore`    | none              | maintenance / tooling                      |
-| `revert`   | none              | reverting a previous commit                |
+| Type       | Effect on version | Reaches the gallery? | Use for                                 |
+| ---------- | ----------------- | -------------------- | --------------------------------------- |
+| `feat`     | minor bump        | yes                  | a new feature                           |
+| `fix`      | patch bump        | yes                  | a bug fix                               |
+| `perf`     | patch bump        | yes                  | performance improvement                 |
+| `revert`   | patch bump        | yes                  | reverting a previous commit             |
+| `docs`     | none              | no                   | documentation only                      |
+| `refactor` | none              | no                   | code change that isn't a fix or feature |
+| `build`    | none              | no                   | build system or dependencies            |
+| `test`     | none              | no                   | tests                                   |
+| `ci`       | none              | no                   | CI / GitHub Actions changes             |
+| `chore`    | none              | no                   | maintenance / tooling                   |
+
+**Pick the type by who is affected, not by how big the change feels.** A release
+publishes a new version to the Community Template Gallery, so `feat`/`fix`/`perf`/`revert`
+should be reserved for changes a GTM user installing the variable would notice. Anything
+that cannot change the variable's behaviour — a README, a CI job, a refactor — belongs in
+the lower group.
+
+Typing a CI or tooling change as `fix` is the easy mistake, because "fix" describes
+almost any repair. `fix(ci):` still has type `fix`, so it bumps the version and its
+subject is published on the public listing.
 
 A breaking change is signalled by a `!` after the type (e.g. `feat!: ...`) or a
 `BREAKING CHANGE:` footer, and triggers a major bump.
@@ -115,8 +125,21 @@ docs: clarify the import steps
   disabled), so **every individual commit** lands on `master` and is parsed by
   release-please. The `Lint commits` CI check lints them all — a stray
   `wip: fixup` in your branch will fail the check, so tidy the history before
-  requesting review. The PR title is linted too, so it stays a valid
-  Conventional Commit.
+  requesting review.
+- **The PR title can cut a release on its own.** The repository is set to
+  `merge_commit_message: PR_TITLE`, so GitHub writes the title into the *body* of
+  the merge commit, and release-please reads it as a changelog entry like any
+  other commit:
+
+  ```
+  subject: Merge pull request #14 from axeptio/docs/readme-reference
+  body:    docs: add a logo header, badges and a field-level reference to the README
+  ```
+
+  A PR contributes its commits **plus** its title. A PR titled `fix:` therefore
+  bumps the version and publishes that line to the public gallery listing even if
+  every commit inside it is `chore`/`ci`/`docs`. `Validate PR title` is the only
+  guard on that string — it is not merely hygiene.
 - Releases, `CHANGELOG.md`, `VERSION`, git tags, GitHub Releases, and the
   `versions:` history in `metadata.yaml` are **all generated automatically**. Do
   not edit versions or the changelog by hand. See
