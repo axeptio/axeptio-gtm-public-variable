@@ -26,10 +26,11 @@ committed to the release PR, because `master` in this repo accepts no direct pus
 
 ## Build & Test
 
-There is **no build, no compile, and no test runner** — nothing to install beyond PyYAML.
-Validation is by inspection plus these checks:
+There is **no build and no compile**. There *is* a test runner — `npm test` executes the
+`___TESTS___` scenarios headlessly against the real sandboxed JS (see below). Checks:
 
 ```bash
+npm ci && npm test                     # the ___TESTS___ scenarios + the .tpl parser unit tests
 python3 scripts/validate-gallery.py    # THE important one — see below (needs 3.7+, PyYAML)
 python3 -c "import json; json.load(open('release-please-config.json'))"
 python3 -c "import json; json.load(open('.release-please-manifest.json'))"
@@ -51,10 +52,24 @@ offering exactly the same keys, and `node --check` over the sandboxed JS and eve
 The selector/permission parity check is the load-bearing one — an option with no matching key
 pattern returns `undefined` at runtime with no error anywhere.
 
-**CI cannot run the `___TESTS___` scenarios.** The Test API (`runCode`, `mock`, `assertThat`) only
-exists inside Tag Manager's proprietary sandboxed-JS interpreter; there is no CLI, no API endpoint,
-and no third-party runner. To exercise the template, import `template.tpl` into a GTM container and
-use the **Tests** tab, then confirm real behaviour in **Preview** against a page running the widget.
+**The `___TESTS___` scenarios run in CI**, via `test/run-tpl-tests.mjs`. Google ships no CLI runner
+for custom templates, so that file shims just enough of the Test API (`runCode`, `mock`,
+`assertApi`, `assertThat`, `fail`) to execute the scenarios under `node --test` against the **real**
+`___SANDBOXED_JS_FOR_WEB_TEMPLATE___` extracted from `template.tpl` — never a copy. The scenarios
+are the single source of truth: the same YAML runs here and in the GTM UI **Tests** tab. `js-yaml`
+is the only dependency; `lib/template.mjs` holds the `.tpl` parsing.
+
+Two shims are specific to this being a `MACRO` rather than a tag, and both fail *silently* if lost:
+`runCode()` returns the variable's value, and `getType` is shimmed (every cookie path gates on
+`getType(x) === 'object'`).
+
+Scenario **names** may only contain letters, numbers, spaces, hyphens and underscores — GTM's editor
+silently refuses to save a template whose test name contains punctuation such as `.` or `/`, so the
+runner fails the build on one rather than letting you find it in the UI.
+
+A shim is not the sandbox. A green suite does not remove the need to import `template.tpl` into a
+GTM container before a release and confirm behaviour in **Preview** against a page running the
+widget.
 
 ## Conventions & Patterns
 
