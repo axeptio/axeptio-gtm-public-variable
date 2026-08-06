@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.1](https://github.com/axeptio/axeptio-gtm-public-variable/compare/v1.1.0...v1.1.1) (2026-08-06)
+
+
+### Documentation
+
+* add a logo header, badges and a field-level reference to the README ([0c23572](https://github.com/axeptio/axeptio-gtm-public-variable/commit/0c23572aafab21518d158581bfb6e2d5b7bb78b4))
+* add a logo header, badges and a field-level reference to the README ([943aea1](https://github.com/axeptio/axeptio-gtm-public-variable/commit/943aea1ec5a9ffb322c8d2d4181426635ea123f9))
+
 ## [1.1.0](https://github.com/axeptio/axeptio-gtm-public-variable/compare/v1.0.3...v1.1.0) (2026-08-05)
 
 
