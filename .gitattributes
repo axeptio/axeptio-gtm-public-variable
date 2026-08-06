@@ -1,0 +1,16 @@
+# .beads/interactions.jsonl is an append-only audit log: two branches that each
+# record an interaction both add a line at the end, and git cannot tell that
+# concatenating them is the right answer — so every parallel beads branch
+# conflicts there. It did so three times in one day, on PRs #13 and #14.
+# A union merge keeps both sides' lines, which is exactly the resolution.
+#
+# Line order is not preserved by a union merge. That is fine here: the file is a
+# passive export, ordered by created_at only as a side effect of how it is
+# written, and nothing reads it positionally.
+.beads/interactions.jsonl merge=union
+
+# Deliberately NOT union: .beads/issues.jsonl is a full state export with one
+# line per issue, so a union merge of two branches that both touched the same
+# issue would keep two lines with the same id and corrupt it. It is regenerated
+# from the Dolt database by the pre-commit hook, so the correct resolution for a
+# conflict there is `bd export -o .beads/issues.jsonl`, not a merge driver.
