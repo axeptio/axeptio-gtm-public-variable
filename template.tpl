@@ -447,6 +447,28 @@ scenarios:
     runCode(mockData);
 
     assertThat(requestedVersion).isEqualTo(1);
+- name: A legacy instance falls back to the cookie
+  code: |-
+    // The load-bearing half of the backward-compatibility story: an instance
+    // saved before the source parameter existed has data.source === undefined
+    // and must resolve to the fallback, since nobody re-opens their variable
+    // after a gallery update. Without this the legacy default could be changed
+    // to datalayer and every other scenario would still pass.
+    const mockData = {};
+    let requestedCookie;
+
+    mock('copyFromDataLayer', (key, version) => {
+      return undefined;
+    });
+    mock('getCookieValues', (name) => {
+      requestedCookie = name;
+      return [',google_analytics,'];
+    });
+
+    const variableResult = runCode(mockData);
+
+    assertThat(requestedCookie).isEqualTo('axeptio_authorized_vendors');
+    assertThat(variableResult).isEqualTo(['google_analytics']);
 - name: The cookie is left alone while the dataLayer still answers
   code: |-
     const mockData = {signal: 'axeptio_authorized_vendors', source: 'auto'};
@@ -516,10 +538,17 @@ scenarios:
     mock('getCookieValues', (name) => {
       return ['lzc1.EYFwpgTghgtgLmAJgSwHYHMD2A'];
     });
+    mock('decodeUriComponent', (value) => {
+      return value;
+    });
 
     const variableResult = runCode(mockData);
 
     assertThat(variableResult).isUndefined();
+    // The marker must short-circuit before the decode retry. Asserting only on
+    // the undefined result proves nothing: an lzc1. value fails JSON.parse
+    // anyway, so the generic parse-failure path returns undefined too.
+    assertApi('decodeUriComponent').wasNotCalled();
 - name: A percent-encoded consent cookie is decoded before parsing
   code: |-
     const mockData = {signal: 'mspa_mode', source: 'cookie'};
