@@ -19,10 +19,13 @@ documentation: "https://support.axeptio.eu/en/articles/348776-conditioning-a-gtm
 # on release — do not add them by hand.
 versions:
   # Latest version
+  - sha: 8774e6eb5443f028951096e6795cb3114bfc5c47
+    changeNotes: |-
+      Release v1.1.1
+  # Older versions
   - sha: c537910a8d05d71842a488c531c9faa426430d14
     changeNotes: |-
       - **template:** expose Google Consent Mode and GPP signals
       - **template:** fall back to the Axeptio cookies when the dataLayer is not ready
-  # Older versions
   - sha: e2999f6b442f1429305ab90af3ac139de81bb3aa
     changeNotes: Initial Version
