@@ -4,3 +4,9 @@ __pycache__/
 
 # Local agent settings
 .claude/settings.local.json
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
