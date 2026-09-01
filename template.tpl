@@ -87,6 +87,22 @@ ___TEMPLATE_PARAMETERS___
     "help": "The data layer only carries a signal once the Axeptio widget has pushed it, which on a repeat visit can be later than the tags you want to gate — the consent cookies are already there when the page starts parsing. <b>Data layer, falling back to the Axeptio cookies</b> reads the data layer first and only reads a cookie when that key has not been pushed yet.<br><br>Two limits apply to the cookie fallback: <b>GPC active</b> and <b>GPP consent type</b> are computed by the widget from its project configuration and are never stored, so they resolve from the data layer only; and a consent cookie compressed by the widget's <code>compressUserCookie</code> setting cannot be decoded here, so <b>Google Consent Mode state</b> and <b>MSPA mode</b> then fall back to nothing rather than to a wrong value."
   },
   {
+    "type": "TEXT",
+    "name": "vendorName",
+    "displayName": "Authorized vendor to test",
+    "simpleValueType": true,
+    "defaultValue": "",
+    "valueHint": "google_analytics",
+    "enablingConditions": [
+      {
+        "paramName": "signal",
+        "paramValue": "axeptio_authorized_vendors",
+        "type": "EQUALS"
+      }
+    ],
+    "help": "Leave this empty to return the whole list of authorized vendors. Name a single vendor to return <b>true</b> or <b>false</b> instead — the value a trigger can be gated on directly, without a second variable or a lookup table.<br><br>The name must be the Axeptio vendor identifier, matched exactly and case-sensitively: <code>google_analytics</code>, not <code>Google Analytics</code>.<br><br>Unlike every other signal here, this one never returns nothing: while the consent state is still unreadable — first visit, widget not loaded, no cookie yet — it reads <b>false</b>, so a tag gated on it does not fire before consent is known."
+  },
+  {
     "type": "GROUP",
     "name": "cookieNamesGroup",
     "displayName": "Cookie names (advanced)",
@@ -153,6 +169,38 @@ const METADATA_PREFIX = '$$';
 // cookie fallback, which is the whole point of it.
 const signal = data.signal || 'axeptio_authorized_vendors';
 const source = data.source || 'auto';
+
+// Empty means "return the list"; a name means "return whether that vendor is in the
+// list". The signal is checked too, not just the field: enablingConditions only hides
+// the field in the editor, so an instance switched from Authorized vendors to another
+// signal still deserialises with the old vendor name attached.
+const vendorName = data.vendorName;
+const wantsBoolean = signal === 'axeptio_authorized_vendors' &&
+  getType(vendorName) === 'string' &&
+  vendorName !== '';
+
+// Unlike every other signal here, an unresolved state is reported as false rather than
+// undefined: this answers "is this vendor authorized", and "not known yet" is not a yes.
+// Fail-closed, so a tag gated on it cannot fire before consent is readable. The strictly-
+// undefined rule below still governs which *source* answers — only this projection differs.
+const isAuthorized = (vendors) => {
+  if (getType(vendors) !== 'array') {
+    return false;
+  }
+  // indexOf on an array is not part of the sandbox's guaranteed surface; forEach is,
+  // and is what fromCookies() already uses.
+  let found = false;
+  vendors.forEach((vendor) => {
+    if (vendor === vendorName) {
+      found = true;
+    }
+  });
+  return found;
+};
+
+// The projection runs after the source has answered, so the dataLayer→cookie fallback
+// is exactly the same one the array itself gets.
+const project = (value) => wantsBoolean ? isAuthorized(value) : value;
 
 const firstCookie = (name) => {
   const values = getCookieValues(name);
@@ -221,7 +269,7 @@ const fromCookies = () => {
 };
 
 if (source === 'cookie') {
-  return fromCookies();
+  return project(fromCookies());
 }
 
 // dataLayer version 1 is deliberate — do not "fix" it to the recommended 2.
@@ -233,12 +281,12 @@ if (source === 'cookie') {
 const fromDataLayer = copyFromDataLayer(signal, 1);
 
 if (source === 'datalayer') {
-  return fromDataLayer;
+  return project(fromDataLayer);
 }
 
 // Strictly undefined, never merely falsy: gpc_active === false and gpp_string === ''
 // are real answers, and must not be thrown away in favour of a staler cookie.
-return fromDataLayer === undefined ? fromCookies() : fromDataLayer;
+return project(fromDataLayer === undefined ? fromCookies() : fromDataLayer);
 
 
 ___WEB_PERMISSIONS___
@@ -646,6 +694,139 @@ scenarios:
 
     assertThat(requestedCookie).isEqualTo('custom_consent');
     assertThat(variableResult).isEqualTo({ad_storage: 'granted'});
+- name: A vendor name turns the array into true
+  code: |-
+    const mockData = {signal: 'axeptio_authorized_vendors', vendorName: 'google_analytics'};
+
+    mock('copyFromDataLayer', (key, version) => {
+      return ['google_analytics', 'facebook_pixel'];
+    });
+
+    const variableResult = runCode(mockData);
+
+    assertThat(variableResult).isEqualTo(true);
+- name: A vendor absent from the array is false
+  code: |-
+    const mockData = {signal: 'axeptio_authorized_vendors', vendorName: 'google_analytics'};
+
+    mock('copyFromDataLayer', (key, version) => {
+      return ['facebook_pixel'];
+    });
+
+    const variableResult = runCode(mockData);
+
+    assertThat(variableResult).isEqualTo(false);
+- name: An empty vendor name still returns the whole array
+  code: |-
+    const mockData = {signal: 'axeptio_authorized_vendors', vendorName: ''};
+
+    mock('copyFromDataLayer', (key, version) => {
+      return ['google_analytics', 'facebook_pixel'];
+    });
+
+    const variableResult = runCode(mockData);
+
+    assertThat(variableResult).isEqualTo(['google_analytics', 'facebook_pixel']);
+- name: An unresolved consent state reads as false rather than undefined
+  code: |-
+    const mockData = {signal: 'axeptio_authorized_vendors', vendorName: 'google_analytics'};
+
+    mock('copyFromDataLayer', (key, version) => {
+      return undefined;
+    });
+    mock('getCookieValues', (name) => {
+      return [];
+    });
+
+    const variableResult = runCode(mockData);
+
+    assertThat(variableResult).isEqualTo(false);
+- name: An empty authorized vendor list is false rather than undefined
+  code: |-
+    const mockData = {signal: 'axeptio_authorized_vendors', vendorName: 'google_analytics'};
+
+    mock('copyFromDataLayer', (key, version) => {
+      return [];
+    });
+
+    const variableResult = runCode(mockData);
+
+    assertThat(variableResult).isEqualTo(false);
+- name: The vendor test is exact and case sensitive
+  code: |-
+    const mockData = {signal: 'axeptio_authorized_vendors', vendorName: 'Google_Analytics'};
+
+    mock('copyFromDataLayer', (key, version) => {
+      return ['google_analytics'];
+    });
+
+    const variableResult = runCode(mockData);
+
+    assertThat(variableResult).isEqualTo(false);
+- name: A vendor name is ignored when the signal is not authorized vendors
+  code: |-
+    const mockData = {signal: 'gpp_string', vendorName: 'google_analytics'};
+
+    mock('copyFromDataLayer', (key, version) => {
+      return 'DBABL~BVQVAAAAAg.QA';
+    });
+
+    const variableResult = runCode(mockData);
+
+    assertThat(variableResult).isEqualTo('DBABL~BVQVAAAAAg.QA');
+- name: The vendor test works off the cookie fallback
+  code: |-
+    const mockData = {signal: 'axeptio_authorized_vendors', vendorName: 'facebook_pixel'};
+    let requestedCookie;
+
+    mock('copyFromDataLayer', (key, version) => {
+      return undefined;
+    });
+    mock('getCookieValues', (name) => {
+      requestedCookie = name;
+      return [',google_analytics,facebook_pixel,'];
+    });
+
+    const variableResult = runCode(mockData);
+
+    assertThat(requestedCookie).isEqualTo('axeptio_authorized_vendors');
+    assertThat(variableResult).isEqualTo(true);
+- name: The vendor test works in cookie only mode
+  code: |-
+    const mockData = {
+      signal: 'axeptio_authorized_vendors',
+      source: 'cookie',
+      vendorName: 'criteo'
+    };
+
+    mock('copyFromDataLayer', (key, version) => {
+      fail('the data layer must not be read in cookie only mode');
+    });
+    mock('getCookieValues', (name) => {
+      return [',google_analytics,facebook_pixel,'];
+    });
+
+    const variableResult = runCode(mockData);
+
+    assertThat(variableResult).isEqualTo(false);
+- name: The vendor test in data layer only mode never reaches the cookies
+  code: |-
+    const mockData = {
+      signal: 'axeptio_authorized_vendors',
+      source: 'datalayer',
+      vendorName: 'google_analytics'
+    };
+
+    mock('copyFromDataLayer', (key, version) => {
+      return undefined;
+    });
+    mock('getCookieValues', (name) => {
+      fail('the cookies must not be read in data layer only mode');
+    });
+
+    const variableResult = runCode(mockData);
+
+    assertThat(variableResult).isEqualTo(false);
 
 
 ___NOTES___
