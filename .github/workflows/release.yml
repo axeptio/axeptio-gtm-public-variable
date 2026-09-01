@@ -71,7 +71,7 @@ jobs:
       # repository's DEFAULT branch — master, which the gallery contract
       # requires it to stay — so the fallback would open the release PR against
       # the branch this flow releases *to*, not the one it releases *from*.
-      - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4.4.1
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         id: release
         with:
           config-file: release-please-config.json
@@ -110,7 +110,7 @@ jobs:
       # both for the template.tpl lookup and for the merge-base below — plus the
       # remote-tracking ref that --force-with-lease compares against. The
       # default depth of 1 breaks all of it.
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: ${{ steps.pr.outputs.branch != '' }}
         with:
           ref: ${{ steps.pr.outputs.branch }}
@@ -121,13 +121,13 @@ jobs:
       # identity and turns on commit.gpgsign globally.
       - name: Import the bot GPG key
         if: ${{ steps.pr.outputs.branch != '' }}
-        uses: crazy-max/ghaction-import-gpg@e89d40939c28e39f97cf32126055eeae86ba74ec # v6.3.0
+        uses: crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd # v7.0.0
         with:
           gpg_private_key: ${{ secrets.BOT_GPG_PRIVATE_KEY }}
           git_user_signingkey: true
           git_commit_gpgsign: true
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         if: ${{ steps.pr.outputs.branch != '' }}
         with:
           node-version-file: .nvmrc
