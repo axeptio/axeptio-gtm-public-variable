@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.0](https://github.com/axeptio/axeptio-gtm-public-variable/compare/v1.1.1...v1.2.0) (2026-09-01)
+
+
+### Features
+
+* **template:** return a boolean for a single authorized vendor ([78c2af4](https://github.com/axeptio/axeptio-gtm-public-variable/commit/78c2af412639793332f1ad67494720bfdccd51f7))
+* **template:** return a boolean for a single authorized vendor ([ab23688](https://github.com/axeptio/axeptio-gtm-public-variable/commit/ab2368853158dde6b687cf5ef0ef1f01f39eab60))
+
 ## [1.1.1](https://github.com/axeptio/axeptio-gtm-public-variable/compare/v1.1.0...v1.1.1) (2026-08-06)
 
 
