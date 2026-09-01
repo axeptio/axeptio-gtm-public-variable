@@ -52,7 +52,8 @@ which imposes requirements on the repository itself — not just on the template
 Google **silently delists the template** a couple of days later, with no notification on the pull
 request and no submission-status page to check.
 
-A CI check, `Validate gallery contract`, runs on every pull request and on pushes to `master`. Run
+A CI check, `Validate gallery contract`, runs on every pull request and on pushes to `master` and
+`develop`. Run
 it yourself before touching `LICENSE`, `metadata.yaml` or `template.tpl`:
 
 ```bash
@@ -66,10 +67,15 @@ It reports every violation at once. The rules most easily broken by accident:
   removes the template from the gallery; that is what happened to the sibling Axeptio tag template
   in SUP-1008.
 - **`___INFO___` must declare `categories`** — 1 to 3 values from Google's list, most relevant first.
-- **`versions:` entries must be real commits on `master`, newest first**, with the `# Latest version`
-  marker on the top entry. Never edit this list by hand; it is generated on release.
+- **`versions:` entries must be real commits reachable from `master`, newest first**, with the
+  `# Latest version` marker on the top entry. Never edit this list by hand; it is generated on
+  release.
 
 ## Commit & pull request conventions
+
+**Target your pull request at `develop`, not `master`.** `develop` is where work lands and where
+releases are cut; `master` is the default branch that Google reads, and it is updated only by a
+maintainer-run promotion. A PR opened against `master` will be asked to retarget.
 
 This project uses [Conventional Commits](https://www.conventionalcommits.org/)
 to drive automated [Semantic Versioning](https://semver.org/) and changelog
@@ -109,7 +115,12 @@ subject is published on the public listing.
 A breaking change is signalled by a `!` after the type (e.g. `feat!: ...`) or a
 `BREAKING CHANGE:` footer, and triggers a major bump.
 
-**Suggested scopes:** `template`, `metadata`, `docs`, `ci`.
+**Suggested scopes:** `template`, `metadata`, `docs`, `ci`, `release`.
+
+The list is a warning, not a gate — an unlisted scope lints as a warning rather than an
+error — but stick to it. `release` is reserved for release automation: the promotion PR
+title is `chore(release): promote develop to master`, and it becomes the merge commit
+message.
 
 Examples:
 
@@ -122,7 +133,7 @@ docs: clarify the import steps
 **Important notes**
 
 - Pull requests are merged with a **merge commit** (squash and rebase are
-  disabled), so **every individual commit** lands on `master` and is parsed by
+  disabled), so **every individual commit** lands on `develop` and is parsed by
   release-please. The `Lint commits` CI check lints them all — a stray
   `wip: fixup` in your branch will fail the check, so tidy the history before
   requesting review.

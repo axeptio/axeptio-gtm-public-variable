@@ -1,23 +1,47 @@
 # Release Automation
 
 Releases are driven by [Conventional Commits](https://www.conventionalcommits.org/) and
-[release-please](https://github.com/googleapis/release-please). Every merge to `master`
-maintains a release PR; merging that PR cuts the release and publishes the new version to
-the GTM Community Template Gallery history.
+[release-please](https://github.com/googleapis/release-please). Every merge to `develop`
+maintains a release PR; merging that PR cuts the release. Publishing it to the GTM Community
+Template Gallery is a second, deliberate step: promoting `develop` to `master`.
 
 ## Branch flow
 
 ```
-feature branch ──PR──> master ──> release PR ──> tag + GitHub Release
-                       (default)  (carries the metadata.yaml entry)
+feature branch ──PR──> develop ──> release PR ──> tag + GitHub Release
+                                   (carries the metadata.yaml entry)
+                          │
+                          └──promotion PR──> master ──> gallery picks it up
+                                             (default)   within 2–3 days
 ```
 
-`master` is both the default branch and the release branch. There is no `develop` and no `main`.
+Two long-lived branches, each with one job:
+
+| Branch | Role |
+| --- | --- |
+| `develop` | where work lands and where releases are cut. Tags, `CHANGELOG.md`, `VERSION` and the `metadata.yaml` entry are all produced here. |
+| `master` | the **default** branch, and the only thing Google reads. Nothing on `develop` is public until it is promoted. |
+
+`master` has to stay the default branch — the gallery contract requires `LICENSE`,
+`metadata.yaml` and `template.tpl` to sit at the root of the default branch, and Google reads
+them from there. `develop` is not a second default; it is a staging area in front of it.
+
+This split exists so that cutting a version and publishing it are separate decisions. A release
+can be tagged, inspected and — if it turns out to be wrong — superseded on `develop` without ever
+having reached a publisher's container.
+
+**Promoting** is a `workflow_dispatch` run of `Promote develop to master`, which opens the
+promotion PR with a conventional title and a body listing the versions about to go live. It never
+merges: the PR still needs a review, and `Validate gallery contract` still has to pass on it.
 
 Pull requests are merged with a **merge commit** (squash and rebase merges are disabled on this
-repository), so every commit in the branch lands on `master` — and every one of them is parsed by
+repository), so every commit in the branch lands on `develop` — and every one of them is parsed by
 release-please to work out the next version. Merge commits themselves are ignored. Tidy the branch
 history before merging; `Lint commits` will reject a non-conventional commit anywhere in it.
+
+Never merge `master` back into `develop`. The promotion is one-directional; a back-merge puts
+`master`'s merge commits into `develop`'s history and makes every future promotion PR fail
+`Validate commit messages`.
 
 ## Workflows
 
@@ -32,18 +56,26 @@ history before merging; `Lint commits` will reject a non-conventional commit any
   `feat!:` / `BREAKING CHANGE:` → major.
 
 - **`.github/workflows/validate-gallery.yml`** (`Validate gallery contract`) — runs
-  `scripts/validate-gallery.py` on every PR **and** on pushes to `master`. It guards the gallery
+  `scripts/validate-gallery.py` on every PR **and** on pushes to `master` and `develop`. It is a
+  required status check on both branches, which is why its trigger has to list both — a required
+  check that never runs blocks a merge rather than passing it. It guards the gallery
   submission contract: the Apache-2.0-only `LICENSE`, `categories` in `___INFO___`, every
   `versions[].sha` real and newest-first, the `# Latest version` marker, and the required files at
   the repo root. Breaking any of these silently delists the template 2–3 days later, with no
   feedback from Google.
 
-- **`.github/workflows/release.yml`** (`Release`) — fires on push to `master`, in two jobs:
+- **`.github/workflows/release.yml`** (`Release`) — fires on push to `develop`, in two jobs.
+  `target-branch: develop` is pinned: left to default it would resolve to the repository's
+  default branch, `master`, and open the release PR against the branch this flow releases *to*.
 
   | Job | What it does |
   | --- | --- |
   | `Maintain the release PR` | release-please scans commits since the last release, opens or updates a release PR that bumps `VERSION`, `CHANGELOG.md` and `.release-please-manifest.json`. Merging that PR tags the commit and publishes a GitHub Release. |
-  | `Sign the release commit and sync metadata.yaml` | finds the open release PR by its `autorelease: pending` label, replays release-please's commit under the bot's GPG key, adds the `chore(metadata): sync version history for <tag>` commit, and force-pushes the branch. |
+  | `Sign the release commit and sync metadata.yaml` | finds the open release PR by its `autorelease: pending` label, replays release-please's commit under the bot's GPG key, adds the `chore(metadata): sync version history for <tag>` commit, and force-pushes the branch. The gallery SHA is read from `origin/develop`, not `origin/master` — the template commit being released has not been promoted yet, so `master` still points at the previous one. |
+
+- **`.github/workflows/promote.yml`** (`Promote develop to master`) — `workflow_dispatch` only.
+  Opens or refreshes the `develop` → `master` pull request that publishes a release. It re-asserts
+  the title on every run, because the title becomes the merge commit message. It never merges.
 
 ## GTM Gallery version history
 
@@ -57,16 +89,21 @@ file textually, so the licence header and existing entries are preserved byte fo
 
 Two things differ from the sibling `axeptio-gtm-public-template`, both deliberate:
 
-1. **The entry is committed to the release PR, not pushed to `master`.** `master` here is
-   protected with a pull-request requirement, `enforce_admins`, required signed commits and no
-   bypass allowance — nothing can push to it, including `axeptio-bot`. Adding the entry to the
-   release branch means `VERSION`, `CHANGELOG.md`, `.release-please-manifest.json` and
-   `metadata.yaml` all arrive in a single merge commit.
+1. **The entry is committed to the release PR, not opened as a sync PR of its own.** The
+   sibling pushes the entry to a `chore/sync-metadata-<tag>` branch and opens a second PR
+   *after* the release is already tagged, which leaves a window where the tag exists but the
+   gallery entry does not. Neither repository can push the entry directly — the rulesets here
+   require a pull request on `develop` as well as on `master`, with required signed commits and
+   no bypass actor — so the choice is only ever between one PR and two. Folding it into the
+   release PR means `VERSION`, `CHANGELOG.md`, `.release-please-manifest.json` and
+   `metadata.yaml` all arrive in a single merge commit, and the generated entry is validated by
+   the same `Validate gallery contract` run that gates the release.
 2. **The published SHA is the last commit that changed `template.tpl`**, not the release merge
    commit — which does not exist yet at that point. That is already this repository's convention:
    the original `Initial Version` entry points at the `Update template.tpl` commit. The gallery
-   only requires a commit reachable from the default branch, and this one is the commit whose tree
-   actually contains the released template.
+   only requires a commit reachable from the default branch — which this one becomes when
+   `develop` is promoted to `master` — and it is the commit whose tree actually contains the
+   released template.
 
 A consequence worth knowing: if a release contains no change to `template.tpl` (a CI-only or
 docs-only release), the resolved SHA is the one already at the top of `metadata.yaml`, the script

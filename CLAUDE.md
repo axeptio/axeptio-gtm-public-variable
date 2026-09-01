@@ -20,9 +20,12 @@ Everything else is licensing (`LICENSE`, `CONTRIBUTING.md`) or release automatio
 (`.github/workflows/`, `scripts/`, `release-please-config.json`, `VERSION`).
 
 The sibling repo `axeptio/axeptio-gtm-public-template` is the *tag* counterpart and uses the same
-tooling. Keep the two aligned, but note one deliberate divergence, documented in
+tooling — including the same `develop` → `master` promotion flow. Keep the two aligned, but note
+one deliberate divergence, documented in
 [docs/release-automation.md](docs/release-automation.md): here the `metadata.yaml` sync is
-committed to the release PR, because `master` in this repo accepts no direct pushes at all.
+committed to the release PR itself, rather than opened as a second PR after the release is
+already tagged. Neither repo can push it directly, so the choice is one PR or two, and one keeps
+the tag and the gallery entry from ever disagreeing.
 
 ## Build & Test
 
@@ -41,7 +44,8 @@ node --check scripts/update-metadata-version.mjs
 Apache-2.0-only, `categories` in `___INFO___`, every `versions[].sha` real and newest-first, the
 `# Latest version` marker, and the required files at the repo root. Breaking any of these silently
 delists the template 2–3 days later with no feedback from Google, which is exactly how SUP-1008
-happened on the sibling repo. CI runs it on every PR **and** on pushes to `master`; run it locally
+happened on the sibling repo. CI runs it on every PR **and** on pushes to `master` and `develop`;
+run it locally
 before touching `LICENSE`, `metadata.yaml` or `template.tpl`.
 
 It also checks `template.tpl` for **internal consistency**, which is not a gallery rule but has
@@ -74,16 +78,22 @@ widget.
 ## Conventions & Patterns
 
 - **Conventional Commits are mandatory.** PRs land as **merge commits** (squash and rebase are
-  disabled), so *every* commit in the branch reaches `master` and is what release-please parses —
+  disabled), so *every* commit in the branch reaches `develop` and is what release-please parses —
   tidy the history before merging. CI (`Lint commits`) checks every commit and the PR title.
   Types/scopes live in `commitlint.config.mjs`.
-- **Single branch: `master`.** It is both the default and the release branch. No `develop`, no
-  `main`.
+- **Two branches: `develop` and `master`.** Work and releases happen on `develop`; `master` is
+  the **default** branch and the only thing Google reads. Target feature PRs at `develop`.
+  Publishing is a separate, deliberate step — the `Promote develop to master` workflow
+  (`workflow_dispatch`) opens the promotion PR. `master` must stay the default branch: the
+  gallery contract requires `LICENSE`, `metadata.yaml` and `template.tpl` at the root of the
+  default branch. **Never merge `master` back into `develop`** — it breaks
+  `Validate commit messages` on every future promotion PR. No `main`.
 - **Never hand-edit `VERSION`, `CHANGELOG.md`, `.release-please-manifest.json`, or the
   `versions:` list in `metadata.yaml`** — all four are generated. See
   [docs/release-automation.md](docs/release-automation.md).
-- **`master` accepts no direct pushes**, by anyone, including `axeptio-bot`: it requires a pull
-  request, enforces the rules on admins, requires signed commits, and has no bypass allowance. Any
+- **Neither `master` nor `develop` accepts direct pushes**, by anyone, including `axeptio-bot`:
+  the Compliance, Review and Copilot rulesets cover both branches, requiring a pull request,
+  signed commits and passing status checks, with no bypass actor and no implicit admin bypass. Any
   automation that needs to change a tracked file must do it through a pull request, and **every
   commit it produces must be GPG-signed** — an unverified commit anywhere in a PR makes that PR
   unmergeable, with no override available. This is why the release workflow re-signs
