@@ -79,6 +79,48 @@ jobs:
           target-branch: develop
           token: ${{ secrets.BOT_GITHUB_TOKEN }}
 
+      # The only way anyone outside this repository can get at a version before
+      # the gallery serves it. A release is cut on develop and does not reach
+      # the gallery until develop is promoted to master, and Google then lags a
+      # further two to three days — so without this there is nothing versioned
+      # for CX or QA to test in between.
+      #
+      # Deliberately a release asset rather than a branch URL. template.tpl is
+      # already fetchable from raw.githubusercontent.com — the repository is
+      # public — but that URL moves under the reader, so "QA tested it" names no
+      # version. This one is immutable and says which build it is in its name.
+      #
+      # The tag rather than the triggering SHA: it is exactly the released tree,
+      # and it cannot shift if develop moves while this run is in flight. The
+      # action itself works over the API, which is why this job had no checkout
+      # until now.
+      #
+      # release_created and tag_name are plain, unprefixed outputs here because
+      # release-please-config.json uses the root path ".": setPathOutput falls
+      # through to core.setOutput(key, value) rather than ".--release_created".
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        with:
+          ref: ${{ steps.release.outputs.tag_name }}
+
+      - name: Attach the template to the release
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        # RELEASE_TAG goes through env rather than being interpolated straight
+        # into the script: never expand ${{ }} inside a run: block.
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag_name }}
+          GH_TOKEN: ${{ secrets.BOT_GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          asset="axeptio-consent-state-${RELEASE_TAG}.tpl"
+          cp template.tpl "$asset"
+          # --clobber because re-running this job is the documented recovery
+          # path for the release flow, and a second upload failing would block
+          # that recovery over an artifact that is byte-identical anyway.
+          gh release upload "$RELEASE_TAG" "$asset" --clobber
+          rm -f "$asset"
+          echo "Attached ${asset} to ${RELEASE_TAG}."
+
   sync-release-branch:
     name: Sign the release commit and sync metadata.yaml
     # Runs after release-please so it sees the PR release-please just wrote.

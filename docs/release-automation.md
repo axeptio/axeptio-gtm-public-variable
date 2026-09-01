@@ -70,7 +70,7 @@ Never merge `master` back into `develop`. The promotion is one-directional; a ba
 
   | Job | What it does |
   | --- | --- |
-  | `Maintain the release PR` | release-please scans commits since the last release, opens or updates a release PR that bumps `VERSION`, `CHANGELOG.md` and `.release-please-manifest.json`. Merging that PR tags the commit and publishes a GitHub Release. |
+  | `Maintain the release PR` | release-please scans commits since the last release, opens or updates a release PR that bumps `VERSION`, `CHANGELOG.md` and `.release-please-manifest.json`. Merging that PR tags the commit and publishes a GitHub Release. On the run that publishes one, it also attaches `axeptio-consent-state-<tag>.tpl` to the release — the only versioned copy of the template available between a release being cut and the gallery serving it, which is what CX and QA test against. See [Testing a version before the gallery has it](../README.md#testing-a-version-before-the-gallery-has-it). |
   | `Sign the release commit and sync metadata.yaml` | finds the open release PR by its `autorelease: pending` label, replays release-please's commit under the bot's GPG key, adds the `chore(metadata): sync version history for <tag>` commit, and force-pushes the branch. The gallery SHA is read from `origin/develop`, not `origin/master` — the template commit being released has not been promoted yet, so `master` still points at the previous one. |
 
 - **`.github/workflows/promote.yml`** (`Promote develop to master`) — `workflow_dispatch` only.

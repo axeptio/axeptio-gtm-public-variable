@@ -156,6 +156,21 @@ Releases follow [Semantic Versioning](https://semver.org/); see
 The Community Template Gallery refreshes on Google's own schedule, so a new version usually
 appears there **two to three days** after it is released here.
 
+### Testing a version before the gallery has it
+
+Every release carries the template as an attachment — `axeptio-consent-state-vX.Y.Z.tpl` on the
+[releases page](https://github.com/axeptio/axeptio-gtm-public-variable/releases). Download it and
+import it into a container with **Templates → New → ⋮ → Import**, and you get that exact version
+without waiting for Google.
+
+Use the attachment rather than the copy of `template.tpl` on a branch. The file in the repository
+moves as work lands, so it names no version; the attachment is fixed to its release, which is what
+makes "tested on v1.2.0" mean something.
+
+An imported template is local to your container and is not linked to the gallery copy. When the
+gallery catches up, delete the imported one and add the gallery version instead, or the two will
+sit side by side.
+
 ## Contributing
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for the commit message conventions, how to run the
