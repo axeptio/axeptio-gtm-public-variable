@@ -55,12 +55,15 @@
 // Env:
 //   GTM_ACCOUNT_ID     (required) numeric account id, not the GTM-XXXXXXX public id
 //   GTM_CONTAINER_ID   (required) numeric container id
-//   GTM_TEMPLATE_NAME  (optional) template display name; default "Axeptio CMP"
+//   GTM_TEMPLATE_NAME  (optional) template display name; default "Axeptio Consent State"
 //   GTM_VERSION_NAME   (optional) label for the created version; default "ci <sha>"
 //   GTM_API_MIN_INTERVAL_MS (optional) min spacing between calls; default 4000.
 //                      GTM's quota is 0.25 QPS enforced over a 100-second window
 //                      and is hard-capped — raising it in Cloud Console does
 //                      nothing — so this is a real constraint, not politeness.
+//   GCP_SERVICE_ACCOUNT (local only) the service account to impersonate. Read from
+//                      the repository variable of the same name when unset; needed
+//                      only outside CI, where ADC supplies the identity instead.
 //   GITHUB_SHA / GITHUB_OUTPUT  consumed when present.
 //
 // Node built-ins plus google-auth-library. No googleapis SDK.
