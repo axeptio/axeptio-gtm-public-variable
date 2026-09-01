@@ -115,7 +115,12 @@ subject is published on the public listing.
 A breaking change is signalled by a `!` after the type (e.g. `feat!: ...`) or a
 `BREAKING CHANGE:` footer, and triggers a major bump.
 
-**Suggested scopes:** `template`, `metadata`, `docs`, `ci`.
+**Suggested scopes:** `template`, `metadata`, `docs`, `ci`, `release`.
+
+The list is a warning, not a gate — an unlisted scope lints as a warning rather than an
+error — but stick to it. `release` is reserved for release automation: the promotion PR
+title is `chore(release): promote develop to master`, and it becomes the merge commit
+message.
 
 Examples:
 
