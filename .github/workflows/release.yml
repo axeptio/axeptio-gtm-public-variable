@@ -1,24 +1,40 @@
 name: Release
 
-# Drives Semantic Versioning from Conventional Commits. On every push to master,
-# release-please maintains a "release PR". A follow-up job then rewrites that
-# PR's branch so that (a) every commit on it is GPG-signed and (b) metadata.yaml
-# carries the new GTM gallery entry. Merging the PR lands VERSION, CHANGELOG.md,
-# .release-please-manifest.json and metadata.yaml in a single merge commit, and
-# the next run tags it and publishes the GitHub Release.
+# Drives Semantic Versioning from Conventional Commits. On every push to
+# develop, release-please maintains a "release PR". A follow-up job then
+# rewrites that PR's branch so that (a) every commit on it is GPG-signed and
+# (b) metadata.yaml carries the new GTM gallery entry. Merging the PR lands
+# VERSION, CHANGELOG.md, .release-please-manifest.json and metadata.yaml in a
+# single merge commit, and the next run tags it and publishes the GitHub
+# Release.
+#
+# Everything here happens on develop, and none of it reaches the gallery on its
+# own: Google reads metadata.yaml from the DEFAULT branch, which is master. A
+# release goes live only when develop is promoted to master — see promote.yml
+# and docs/release-automation.md.
 #
 # Why the branch is rewritten rather than just appended to:
 #   release-please creates its commit through the Git Data API, which cannot
-#   sign. master requires signed commits, and GitHub refuses to merge a pull
+#   sign. The Compliance ruleset requires signed commits on develop as well as
+#   on master, and GitHub refuses to merge a pull
 #   request containing an unverified commit — the sibling repo
 #   axeptio-gtm-public-template has needed an admin override
 #   (overridden_codes: ["invalid_signature"]) on every single release merge.
-#   That escape hatch does not exist here: master has enforce_admins: true and
-#   no bypass allowance, so an unsigned release commit would be unmergeable
-#   forever. This job replays release-please's commit under the bot's GPG key.
+#   That escape hatch does not exist here: the ruleset has no bypass actor and
+#   rulesets grant admins no implicit bypass, so an unsigned release commit
+#   would be unmergeable by anyone. This job replays release-please's commit
+#   under the bot's GPG key.
 #
-# Why the metadata sync happens inside the PR rather than as a push to master:
-#   nothing can push to master here, for the same protection reasons.
+# Why the metadata sync happens inside the release PR rather than as a separate
+# PR of its own (which is what the sibling repo does):
+#   nothing can push directly to develop either — the Review ruleset requires a
+#   pull request on develop as well as on master — so a push was never an
+#   option. Given that, folding the entry into the release PR beats opening a
+#   second one: the gallery entry is validated by the same `Validate gallery
+#   contract` run that gates the release, and the whole release lands in one
+#   merge. The sibling's separate sync PR is opened only *after* the release is
+#   already tagged and published, which leaves a window where the tag exists but
+#   the gallery entry does not.
 #
 # Why not the canonical axeptio/tech-scripts caller workflows (ENG-11756)?
 #   This repository is PUBLIC and tech-scripts is INTERNAL. GitHub only lets a
@@ -27,7 +43,7 @@ name: Release
 on:
   push:
     branches:
-      - master
+      - develop
   workflow_dispatch:
 
 permissions:
@@ -51,13 +67,16 @@ jobs:
       # from creating or approving PRs (can_approve_pull_request_reviews=false),
       # so release-please cannot open its release PR without a real bot account.
       #
-      # target-branch is intentionally omitted — it defaults to the repository's
-      # default branch, which is master, the same branch this workflow fires on.
+      # target-branch is pinned rather than left to default. It defaults to the
+      # repository's DEFAULT branch — master, which the gallery contract
+      # requires it to stay — so the fallback would open the release PR against
+      # the branch this flow releases *to*, not the one it releases *from*.
       - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4.4.1
         id: release
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+          target-branch: develop
           token: ${{ secrets.BOT_GITHUB_TOKEN }}
 
   sync-release-branch:
@@ -87,7 +106,7 @@ jobs:
 
       # fetch-depth: 0 is load-bearing twice over. actions/checkout only fetches
       # every head (+refs/heads/*:refs/remotes/origin/*) when fetch-depth <= 0,
-      # which is what gives this job origin/master with full history — needed
+      # which is what gives this job origin/develop with full history — needed
       # both for the template.tpl lookup and for the merge-base below — plus the
       # remote-tracking ref that --force-with-lease compares against. The
       # default depth of 1 breaks all of it.
@@ -126,9 +145,13 @@ jobs:
           # resolves this to the branch commit rather than the merge commit,
           # which is the convention this repo already follows: metadata.yaml's
           # e2999f6b… is the "Update template.tpl" commit.
-          sha=$(git log -1 --format=%H origin/master -- template.tpl)
+          # origin/develop, not origin/master: the template change being released
+          # is on develop and has not been promoted yet, so master still points
+          # at the PREVIOUS template commit. Reading it there would publish a
+          # gallery entry for the wrong commit — a duplicate of the last one.
+          sha=$(git log -1 --format=%H origin/develop -- template.tpl)
           if [[ -z "${sha}" ]]; then
-            echo "::error::Found no commit touching template.tpl on master." >&2
+            echo "::error::Found no commit touching template.tpl on develop." >&2
             exit 1
           fi
           echo "tag=v${version}" >> "$GITHUB_OUTPUT"
@@ -156,10 +179,10 @@ jobs:
           fi
 
           orig=$(git rev-parse HEAD)
-          # Not origin/master: master may have moved on since release-please cut
-          # this branch, and resetting onto a newer master would silently revert
-          # whatever landed in between. merge-base is where the branch was cut.
-          base=$(git merge-base HEAD origin/master)
+          # Not origin/develop: develop may have moved on since release-please
+          # cut this branch, and resetting onto a newer develop would silently
+          # revert whatever landed in between. merge-base is where it was cut.
+          base=$(git merge-base HEAD origin/develop)
 
           # Replay release-please's commit — same tree, same message, same
           # author — this time GPG-signed.

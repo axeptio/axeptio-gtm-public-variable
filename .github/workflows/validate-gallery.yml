@@ -9,12 +9,18 @@ name: Validate gallery contract
 # Runs on pushes to master as well as pull requests: the LICENSE regression
 # reached master through a merge, which a PR-only gate would not have stopped.
 on:
+  # Both branches, on purpose. The Compliance ruleset makes this a required
+  # status check on develop as well as on master, and a required check that
+  # never runs blocks the merge rather than passing it. Feature PRs now target
+  # develop, and the promotion PR targets master.
   pull_request:
     branches:
       - master
+      - develop
   push:
     branches:
       - master
+      - develop
 
 permissions:
   contents: read
