@@ -158,10 +158,15 @@ appears there **two to three days** after it is released here.
 
 ### Testing a version before the gallery has it
 
-Every release carries the template as an attachment — `axeptio-consent-state-vX.Y.Z.tpl` on the
+**From v1.2.0 onward**, each release carries the template as an attachment —
+`axeptio-consent-state-vX.Y.Z.tpl` on the
 [releases page](https://github.com/axeptio/axeptio-gtm-public-variable/releases). Download it and
 import it into a container with **Templates → New → ⋮ → Import**, and you get that exact version
 without waiting for Google.
+
+Releases before v1.2.0 have no attachment, and will not be given one: they are already served by
+the gallery, which is the better way to install them. For those, use `template.tpl` at the
+matching tag.
 
 Use the attachment rather than the copy of `template.tpl` on a branch. The file in the repository
 moves as work lands, so it names no version; the attachment is fixed to its release, which is what
