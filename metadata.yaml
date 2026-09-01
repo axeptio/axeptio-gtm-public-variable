@@ -19,10 +19,13 @@ documentation: "https://support.axeptio.eu/en/articles/348776-conditioning-a-gtm
 # on release — do not add them by hand.
 versions:
   # Latest version
+  - sha: 9962d1dbab5b9d946cfda73ce2c9218ba0fb5c32
+    changeNotes: |-
+      - **template:** return a boolean for a single authorized vendor
+  # Older versions
   - sha: 8774e6eb5443f028951096e6795cb3114bfc5c47
     changeNotes: |-
       Release v1.1.1
-  # Older versions
   - sha: c537910a8d05d71842a488c531c9faa426430d14
     changeNotes: |-
       - **template:** expose Google Consent Mode and GPP signals
