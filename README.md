@@ -42,6 +42,7 @@ Step-by-step setup lives in the Help Center:
 | Field | Default | What it does |
 | --- | --- | --- |
 | **Consent signal** | Authorized vendors | Which signal the variable returns. See [below](#the-signals). |
+| **Authorized vendor to test** | *(empty)* | Name one vendor to get a boolean instead of the list. See [below](#testing-a-single-vendor). |
 | **Read from** | Data layer, falling back to the cookies | Where the signal is read from. See [below](#read-from). |
 | **Cookie names** | *(the Axeptio defaults)* | Only needed if the site renames the consent cookies. |
 
@@ -49,7 +50,7 @@ Step-by-step setup lives in the Help Center:
 
 | Signal | Returns | Published with |
 | --- | --- | --- |
-| **Authorized vendors** | array of vendor names, e.g. `["google_analytics", "facebook_pixel"]` | `axeptio_update` |
+| **Authorized vendors** | array of vendor names, e.g. `["google_analytics", "facebook_pixel"]` — or a boolean, if you [name a vendor](#testing-a-single-vendor) | `axeptio_update` |
 | **Google Consent Mode state** | object: `ad_storage`, `analytics_storage`, `ad_user_data`, `ad_personalization` (each `granted`/`denied`), plus `version` | `axeptio_update`, on projects with Consent Mode enabled |
 | **GPP string** | the raw GPP string | `gpp_consent_given` / `gpp_consent_refused` / `gpp_consent_updated` |
 | **MSPA mode** | `opt-out` or `service-provider` | as above |
@@ -57,6 +58,30 @@ Step-by-step setup lives in the Help Center:
 | **GPP consent type** | `opt-in` or `opt-out` | as above |
 
 The GPP signals only appear on GPP-enabled projects.
+
+### Testing a single vendor
+
+A trigger cannot be gated on an array. Fill in **Authorized vendor to test** with one Axeptio
+vendor identifier and the variable returns a boolean instead — no second variable, no lookup
+table:
+
+| Consent state | Vendor field empty | Vendor field = `google_analytics` |
+| --- | --- | --- |
+| `["google_analytics", "facebook_pixel"]` | the array | `true` |
+| `["facebook_pixel"]` | the array | `false` |
+| `[]` | the array | `false` |
+| nothing readable yet | `undefined` | `false` |
+
+The name is matched **exactly and case-sensitively** against the vendor identifier —
+`google_analytics`, not `Google Analytics`.
+
+That last row is the one to know about. Every other signal here returns `undefined` while the
+consent state is unreadable — first visit, widget not loaded, no cookie yet. This one returns
+`false`, because it answers "is this vendor authorized" and "not known yet" is not a yes. It is
+fail-closed by design: a tag gated on it will not fire before consent is readable. If you need to
+tell "refused" apart from "not yet known", leave the field empty and test the array.
+
+The field applies to **Authorized vendors** only, and is hidden for the other signals.
 
 ### Read from
 
