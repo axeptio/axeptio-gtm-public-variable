@@ -100,7 +100,7 @@ ___TEMPLATE_PARAMETERS___
         "type": "EQUALS"
       }
     ],
-    "help": "Leave this empty to return the whole list of authorized vendors. Name a single vendor to return <b>true</b> or <b>false</b> instead — the value a trigger can be gated on directly, without a second variable or a lookup table.<br><br>The name must be the Axeptio vendor identifier, matched exactly and case-sensitively: <code>google_analytics</code>, not <code>Google Analytics</code>.<br><br>Unlike every other signal here, this one never returns nothing: while the consent state is still unreadable — first visit, widget not loaded, no cookie yet — it reads <b>false</b>, so a tag gated on it does not fire before consent is known."
+    "help": "Leave this empty to return the whole list of authorized vendors. Name a single vendor to return <b>true</b> or <b>false</b> instead — the value a trigger can be gated on directly, without a second variable or a lookup table.<br><br>The name must be the Axeptio vendor identifier, matched exactly and case-sensitively: <code>google_analytics</code>, not <code>Google Analytics</code>.<br><br>With a vendor named, the variable never returns nothing — unlike every other signal here. While the consent state is still unreadable — first visit, widget not loaded, no cookie yet — it reads <b>false</b>, so a tag gated on it does not fire before consent is known. Left empty, it behaves like the other signals and returns nothing until the list is readable, which is what to use if you need to tell <i>refused</i> apart from <i>not known yet</i>."
   },
   {
     "type": "GROUP",
